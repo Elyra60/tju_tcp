@@ -1,6 +1,19 @@
 #include "tju_tcp.h"
 #include <errno.h>
 #include <time.h>
+#include <limits.h>
+
+/* 课程参数尚未随框架发布，可用编译器 -D 覆盖；默认采用保守的 MSL。
+ * 独立测试可缩短等待，但正式验收必须采用课程平台给出的值。 */
+#ifndef TJU_MSL
+#define TJU_MSL 120
+#endif
+#ifndef TJU_CLOSE_RETRIES
+#define TJU_CLOSE_RETRIES 5
+#endif
+#ifndef TJU_CLOSE_TIMEOUT
+#define TJU_CLOSE_TIMEOUT 120
+#endif
 
 /*
  * 三次握手所需的控制信息统一保存在本文件的私有结构中。
@@ -17,6 +30,15 @@ typedef struct handshake_ctx {
     unsigned int current_rto_ms;     // 当前握手重传超时，单位为毫秒
     int syn_was_retransmitted;       // 握手阶段是否重传过 SYN 或 SYN-ACK
     int queued_for_accept;           // 是否已完成握手并等待 accept 取出
+    int close_requested;             // close 一进入即置位，禁止接纳新的发送请求
+    int failed;                      // 超时异常终止；保留未确认数据并报告失败
+    int peer_fin;                    // 已按序收到对端 FIN，接收方向到达 EOF
+    int fin_sent;
+    int fin_acked;
+    uint32_t fin_seq;                // FIN 的固定序列号；重传不能再次消耗序列号
+    uint32_t data_end;               // 当前待确认数据段的右边界
+    int data_pending;               // 简化停等发送：同一连接至多一个未确认数据段
+    struct timespec time_wait_until; // 单调时钟上的 TIME-WAIT 截止时刻
     struct handshake_ctx* next;      // 全局握手上下文链表的下一项
 } handshake_ctx_t;
 
@@ -115,6 +137,42 @@ static void add_milliseconds(struct timespec* deadline, unsigned int ms){
     }
 }
 
+/* 以下连接状态辅助函数均要求持有 handshake_lock。
+ * 不释放 socket 或锁本身：应用及内核接收线程可能仍持有指针。
+ * 已确认发送缓存由发送线程释放，未读接收数据保留给 recv。 */
+static void finish_connection(handshake_ctx_t* ctx, int failed){
+    tju_tcp_t* sock = ctx->sock;
+    int slot = cal_hash(sock->established_local_addr.ip,
+        sock->established_local_addr.port, sock->established_remote_addr.ip,
+        sock->established_remote_addr.port);
+    if(established_socks[slot] == sock) established_socks[slot] = NULL;
+    ctx->failed = failed;
+    sock->state = CLOSED;
+    pthread_cond_broadcast(&handshake_cond);
+}
+
+static void enter_time_wait(handshake_ctx_t* ctx){
+    ctx->sock->state = TIME_WAIT;
+    clock_gettime(CLOCK_MONOTONIC, &ctx->time_wait_until);
+    ctx->time_wait_until.tv_sec += 2 * TJU_MSL;
+}
+
+static int deadline_reached(struct timespec deadline){
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec > deadline.tv_sec ||
+        (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec);
+}
+
+/* 条件变量使用默认实时时钟；短周期等待后用单调时钟核验协议期限，
+ * 避免把无关 ACK 的唤醒当作超时，也不因重复报文无限延长 FIN 重传期限。 */
+static void wait_connection_event(void){
+    struct timespec tick;
+    clock_gettime(CLOCK_REALTIME, &tick);
+    add_milliseconds(&tick, 50);
+    pthread_cond_timedwait(&handshake_cond, &handshake_lock, &tick);
+}
+
 static tju_tcp_t* pop_established_connection(tju_tcp_t* listener){
     /*
      * 从指定监听 socket 的完成队列中取出一个连接。
@@ -165,6 +223,51 @@ static void* synack_retransmission_worker(void* arg){
         pthread_mutex_unlock(&handshake_lock);
         rto_ms *= 2U;
     }
+    return NULL;
+}
+
+/*
+ * tju_close 发出首个 FIN 后由该线程继续维护关闭定时器。应用线程无需阻塞完整
+ * 的四次挥手和 2MSL，但 socket 状态仍会按 FIN_WAIT/CLOSING/TIME_WAIT 推进。
+ * close_requested 已经封闭发送入口，因此后台线程不需要占用 send_lock。
+ */
+static void* close_retransmission_worker(void* arg){
+    handshake_ctx_t* ctx = (handshake_ctx_t*)arg;
+    unsigned int rto;
+    int retries = 0;
+    struct timespec retry_at, terminate_at;
+
+    pthread_mutex_lock(&handshake_lock);
+    rto = ctx->current_rto_ms ? ctx->current_rto_ms : 1000;
+    clock_gettime(CLOCK_MONOTONIC, &retry_at);
+    terminate_at = retry_at;
+    terminate_at.tv_sec += TJU_CLOSE_TIMEOUT;
+    add_milliseconds(&retry_at, rto);
+
+    while(ctx->sock->state != CLOSED){
+        if(ctx->sock->state == TIME_WAIT){
+            if(deadline_reached(ctx->time_wait_until)){
+                finish_connection(ctx, 0);
+                break;
+            }
+        }else if(deadline_reached(terminate_at)){
+            finish_connection(ctx, 1);
+            break;
+        }else if(!ctx->fin_acked && deadline_reached(retry_at)){
+            if(retries++ >= TJU_CLOSE_RETRIES){
+                finish_connection(ctx, 1);
+                break;
+            }
+            /* FIN 重传必须复用首次 FIN 的序列号，不能重复消耗序列空间。 */
+            send_control(ctx->sock, ctx->fin_seq, ctx->rcv_nxt,
+                FIN_FLAG_MASK | ACK_FLAG_MASK);
+            if(rto <= UINT_MAX / 2) rto *= 2;
+            clock_gettime(CLOCK_MONOTONIC, &retry_at);
+            add_milliseconds(&retry_at, rto);
+        }
+        wait_connection_event();
+    }
+    pthread_mutex_unlock(&handshake_lock);
     return NULL;
 }
 
@@ -319,27 +422,84 @@ int tju_connect(tju_tcp_t* sock, tju_sock_addr target_addr){
 }
 
 int tju_send(tju_tcp_t* sock, const void *buffer, int len){
-    // 这里当然不能直接简单地调用sendToLayer3
-    char* data = malloc(len);
-    memcpy(data, buffer, len);
-
-    char* msg;
-    uint32_t seq = 464;
-    uint16_t plen = DEFAULT_HEADER_LEN + len;
-
-    msg = create_packet_buf(sock->established_local_addr.port, sock->established_remote_addr.port, seq, 0, 
-              DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, data, len);
-
-    sendToLayer3(msg, plen);
-    
-    return 0;
+    handshake_ctx_t* ctx;
+    int offset = 0;
+    if(!sock || len < 0 || (len && !buffer)) { errno = EINVAL; return -1; }
+    /* send_lock 串行化应用发送；close 先禁止新发送，再等待当前已接纳请求。
+     * 锁顺序统一为 send_lock -> handshake_lock，接收线程只取后者。 */
+    pthread_mutex_lock(&sock->send_lock);
+    pthread_mutex_lock(&handshake_lock);
+    ctx = find_handshake(sock);
+    if(!ctx || ctx->close_requested || ctx->failed ||
+       (sock->state != ESTABLISHED && sock->state != CLOSE_WAIT)){
+        pthread_mutex_unlock(&handshake_lock);
+        pthread_mutex_unlock(&sock->send_lock);
+        errno = EPIPE;
+        return -1;
+    }
+    /* 先保存整个请求，直到累计确认后才释放；失败时也不默默丢弃缓存。
+     * 这是关闭的数据排空前提，尚不是第 5.3 节完整滑动窗口实现。 */
+    if(len){
+        sock->sending_buf = malloc(len);
+        if(!sock->sending_buf){
+            pthread_mutex_unlock(&handshake_lock);
+            pthread_mutex_unlock(&sock->send_lock);
+            errno = ENOMEM;
+            return -1;
+        }
+        memcpy(sock->sending_buf, buffer, len);
+    }
+    sock->sending_len = len;
+    while(offset < len && !ctx->failed){
+        int chunk = len - offset;
+        unsigned int rto = ctx->current_rto_ms ? ctx->current_rto_ms : 1000;
+        int retries = 0;
+        uint32_t seq = ctx->snd_nxt;
+        struct timespec deadline;
+        if(chunk > MAX_LEN - DEFAULT_HEADER_LEN) chunk = MAX_LEN - DEFAULT_HEADER_LEN;
+        ctx->snd_nxt += (uint32_t)chunk;
+        ctx->data_end = ctx->snd_nxt;
+        ctx->data_pending = 1;
+        while(ctx->data_pending && !ctx->failed){
+            char* msg = create_packet_buf(sock->established_local_addr.port,
+                sock->established_remote_addr.port, seq, ctx->rcv_nxt,
+                DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN + chunk, ACK_FLAG_MASK,
+                TCP_RECVWN_SIZE, 0, sock->sending_buf + offset, chunk);
+            sendToLayer3(msg, DEFAULT_HEADER_LEN + chunk);
+            free(msg);
+            clock_gettime(CLOCK_MONOTONIC, &deadline);
+            add_milliseconds(&deadline, rto);
+            while(ctx->data_pending && !ctx->failed && !deadline_reached(deadline))
+                wait_connection_event();
+            if(!ctx->data_pending || ctx->failed) break;
+            if(retries++ >= TJU_CLOSE_RETRIES){ finish_connection(ctx, 1); break; }
+            if(rto <= UINT_MAX / 2) rto *= 2;
+        }
+        if(!ctx->failed){ offset += chunk; sock->sending_len = len - offset; }
+    }
+    if(!ctx->failed){ free(sock->sending_buf); sock->sending_buf = NULL; }
+    int result = ctx->failed ? -1 : 0;
+    pthread_mutex_unlock(&handshake_lock);
+    pthread_mutex_unlock(&sock->send_lock);
+    if(result < 0) errno = ETIMEDOUT;
+    return result;
 }
 int tju_recv(tju_tcp_t* sock, void *buffer, int len){
-    while(sock->received_len<=0){
-        // 阻塞
+    if(!sock || len < 0 || (len && !buffer)){ errno = EINVAL; return -1; }
+    if(len == 0) return 0;
+    /* 收包、EOF 和应用读取共用握手锁，消除忙等和 received_len 数据竞争。
+     * FIN 之前的已接收数据必须先交付；仅缓存排空后才向应用报告 EOF。 */
+    pthread_mutex_lock(&handshake_lock);
+    handshake_ctx_t* ctx = find_handshake(sock);
+    while(sock->received_len == 0 && ctx && !ctx->peer_fin &&
+          !ctx->failed && sock->state != CLOSED)
+        pthread_cond_wait(&handshake_cond, &handshake_lock);
+    if(sock->received_len == 0){
+        int failed = ctx && ctx->failed;
+        pthread_mutex_unlock(&handshake_lock);
+        if(failed) errno = ECONNRESET;
+        return failed ? -1 : 0;
     }
-
-    while(pthread_mutex_lock(&(sock->recv_lock)) != 0); // 加锁
 
     int read_len = 0;
     if (sock->received_len >= len){ // 从中读取len长度的数据
@@ -351,22 +511,21 @@ int tju_recv(tju_tcp_t* sock, void *buffer, int len){
     memcpy(buffer, sock->received_buf, read_len);
 
     if(read_len < sock->received_len) { // 还剩下一些
-        char* new_buf = malloc(sock->received_len - read_len);
-        memcpy(new_buf, sock->received_buf + read_len, sock->received_len - read_len);
-        free(sock->received_buf);
+        memmove(sock->received_buf, sock->received_buf + read_len, sock->received_len - read_len);
         sock->received_len -= read_len;
-        sock->received_buf = new_buf;
     }else{
         free(sock->received_buf);
         sock->received_buf = NULL;
         sock->received_len = 0;
     }
-    pthread_mutex_unlock(&(sock->recv_lock)); // 解锁
+    pthread_mutex_unlock(&handshake_lock);
 
     return 0;
 }
 
 int tju_handle_packet(tju_tcp_t* sock, char* pkt){
+    if(!sock || !pkt || get_hlen(pkt) != DEFAULT_HEADER_LEN ||
+       get_plen(pkt) < DEFAULT_HEADER_LEN || get_plen(pkt) > MAX_LEN) return -1;
     /* 先解析握手判断所需的公共字段，后续分支再依据 socket 状态处理。 */
     uint8_t flags = get_flags(pkt);
     uint32_t seq = get_seq(pkt);
@@ -496,32 +655,96 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
         send_control(sock, final_seq, final_ack, ACK_FLAG_MASK);
         return 0;
     }
-    pthread_mutex_unlock(&handshake_lock);
-
-    uint32_t data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
-
-    /* 纯 ACK 等无负载控制报文不应被错误写入应用接收缓冲区。 */
-    if(data_len == 0){
+    /* 握手以外只处理本连接的合法端口和已同步状态；控制报文不得落入数据缓存。 */
+    if(!ctx || sock->state == CLOSED || sock->state == LISTEN ||
+       sock->state == SYN_SENT || sock->state == SYN_RECV ||
+       get_src(pkt) != sock->established_remote_addr.port ||
+       get_dst(pkt) != sock->established_local_addr.port || (flags & SYN_FLAG_MASK)){
+        pthread_mutex_unlock(&handshake_lock);
         return 0;
     }
-
-    // 把收到的数据放到接受缓冲区
-    while(pthread_mutex_lock(&(sock->recv_lock)) != 0); // 加锁
-
-    if(sock->received_buf == NULL){
-        sock->received_buf = malloc(data_len);
-    }else {
-        sock->received_buf = realloc(sock->received_buf, sock->received_len + data_len);
+    uint32_t data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
+    /* 停等发送只有一个确认边界；不接受确认尚未发出数据的未来 ACK。 */
+    if((flags & ACK_FLAG_MASK) && ctx->data_pending && ack == ctx->data_end)
+        ctx->data_pending = 0;
+    if((flags & ACK_FLAG_MASK) && ctx->fin_sent && ack == ctx->fin_seq + 1U){
+        ctx->fin_acked = 1;
+        if(sock->state == FIN_WAIT_1) sock->state = FIN_WAIT_2;
+        else if(sock->state == CLOSING) enter_time_wait(ctx);
+        else if(sock->state == LAST_ACK) finish_connection(ctx, 0);
     }
-    memcpy(sock->received_buf + sock->received_len, pkt + DEFAULT_HEADER_LEN, data_len);
-    sock->received_len += data_len;
-
-    pthread_mutex_unlock(&(sock->recv_lock)); // 解锁
-
-
+    /* FIN 可以紧跟报文负载。先按序接收负载，再判断 FIN 所在序列号。
+     * 失序数据和失序 FIN 不推进确认点，发送端后续重传时再接收。
+     * 已交付的重复数据不再次交付，保证关闭期间重传不会破坏接收内容。 */
+    if(data_len && !ctx->peer_fin && seq == ctx->rcv_nxt &&
+       sock->state != CLOSED && data_len <= (uint32_t)(INT_MAX - sock->received_len)){
+        char* next = realloc(sock->received_buf, sock->received_len + data_len);
+        if(next){
+            sock->received_buf = next;
+            memcpy(next + sock->received_len, pkt + DEFAULT_HEADER_LEN, data_len);
+            sock->received_len += data_len;
+            ctx->rcv_nxt += data_len;
+        }
+    }
+    if(flags & FIN_FLAG_MASK){
+        uint32_t fin = seq + data_len;
+        if(!ctx->peer_fin && fin == ctx->rcv_nxt && sock->state != CLOSED){
+            ctx->peer_fin = 1;
+            ctx->rcv_nxt++; // FIN 只在首次按序接收时占用一个序列号
+            if(sock->state == ESTABLISHED) sock->state = CLOSE_WAIT;
+            else if(sock->state == FIN_WAIT_1) sock->state = CLOSING;
+            else if(sock->state == FIN_WAIT_2) enter_time_wait(ctx);
+        }else if(ctx->peer_fin && fin == ctx->rcv_nxt - 1U && sock->state == TIME_WAIT){
+            // 最终 ACK 丢失时，对端会重发 FIN；重新开始完整的 2MSL 等待。
+            enter_time_wait(ctx);
+        }
+    }
+    if((data_len || (flags & FIN_FLAG_MASK)) && sock->state != CLOSED)
+        send_control(sock, ctx->snd_nxt, ctx->rcv_nxt, ACK_FLAG_MASK);
+    pthread_cond_broadcast(&handshake_cond);
+    pthread_mutex_unlock(&handshake_lock);
     return 0;
 }
 
 int tju_close (tju_tcp_t* sock){
+    handshake_ctx_t* ctx;
+    pthread_t close_thread;
+    if(!sock){ errno = EINVAL; return -1; }
+    pthread_mutex_lock(&handshake_lock);
+    ctx = find_handshake(sock);
+    if(!ctx || ctx->close_requested ||
+       (sock->state != ESTABLISHED && sock->state != CLOSE_WAIT)){
+        pthread_mutex_unlock(&handshake_lock);
+        errno = ENOTCONN;
+        return -1;
+    }
+    /* 先封闭发送入口，再等待已接纳的 send 完成确认；这里不能持握手锁等
+     * send_lock，否则接收线程无法处理 ACK，正在进行的 send 将无法结束。 */
+    ctx->close_requested = 1;
+    pthread_mutex_unlock(&handshake_lock);
+    pthread_mutex_lock(&sock->send_lock);
+    pthread_mutex_lock(&handshake_lock);
+    if(ctx->failed){
+        pthread_mutex_unlock(&handshake_lock);
+        pthread_mutex_unlock(&sock->send_lock);
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    ctx->fin_sent = 1;
+    ctx->fin_seq = ctx->snd_nxt++;
+    sock->state = ctx->peer_fin ? LAST_ACK : FIN_WAIT_1;
+    send_control(sock, ctx->fin_seq, ctx->rcv_nxt, FIN_FLAG_MASK | ACK_FLAG_MASK);
+    /* 首个 FIN 发送成功后启动后台状态机。若线程无法创建，就明确返回失败，
+     * 不能让连接停留在无人维护的 FIN_WAIT/LAST_ACK 状态。 */
+    if(pthread_create(&close_thread, NULL, close_retransmission_worker, ctx) != 0){
+        finish_connection(ctx, 1);
+        pthread_mutex_unlock(&handshake_lock);
+        pthread_mutex_unlock(&sock->send_lock);
+        errno = EAGAIN;
+        return -1;
+    }
+    pthread_detach(close_thread);
+    pthread_mutex_unlock(&handshake_lock);
+    pthread_mutex_unlock(&sock->send_lock);
     return 0;
 }
