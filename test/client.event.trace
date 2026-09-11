@@ -1,0 +1,7 @@
+[CWND] [1789092091209] [type:0 size:65535]
+[RWND] [1789092091209] [size:44000]
+[SWND] [1789092091209] [size:65535]
+[SEND] [1789092091209] [seq:2595917215 ack:0 flag:8 length:0]
+[SEND] [1789092092211] [seq:2595917215 ack:0 flag:8 length:0]
+[SEND] [1789092094212] [seq:2595917215 ack:0 flag:8 length:0]
+[SEND] [1789092098214] [seq:2595917215 ack:0 flag:8 length:0]
