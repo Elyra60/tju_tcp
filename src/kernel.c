@@ -12,13 +12,13 @@ void onTCPPocket(char* pkt){
     gethostname(hostname, 8);
     uint32_t remote_ip, local_ip;
     if(strcmp(hostname,"server")==0){ // 自己是服务端 远端就是客户端
-        // 服务端本地地址为 172.17.0.6，对端客户端地址为 172.17.0.5。
-        local_ip = inet_network("172.17.0.6");
-        remote_ip = inet_network("172.17.0.5");
+        // 本地测试环境：服务端为 172.17.0.3，客户端为 172.17.0.2。
+        local_ip = inet_network("172.17.0.3");
+        remote_ip = inet_network("172.17.0.2");
     }else if(strcmp(hostname,"client")==0){ // 自己是客户端 远端就是服务端 
-        // 客户端本地地址为 172.17.0.5，对端服务端地址为 172.17.0.6。
-        local_ip = inet_network("172.17.0.5");
-        remote_ip = inet_network("172.17.0.6");
+        // 本地测试环境：客户端为 172.17.0.2，服务端为 172.17.0.3。
+        local_ip = inet_network("172.17.0.2");
+        remote_ip = inet_network("172.17.0.3");
     }
 
     int hashval;
@@ -65,12 +65,12 @@ void sendToLayer3(char* packet_buf, int packet_len){
     conn.sin_port        = htons(20218);
     int rst;
     if(strcmp(hostname,"server")==0){
-        // 服务端发送的底层 UDP 数据报应投递到客户端地址。
-        conn.sin_addr.s_addr = inet_addr("172.17.0.5");
+        // 服务端发送的底层 UDP 数据报投递到本地测试客户端。
+        conn.sin_addr.s_addr = inet_addr("172.17.0.2");
         rst = sendto(BACKEND_UDPSOCKET_ID, packet_buf, packet_len, 0, (struct sockaddr*)&conn, sizeof(conn));
     }else if(strcmp(hostname,"client")==0){       
-        // 客户端发送的底层 UDP 数据报应投递到服务端地址。
-        conn.sin_addr.s_addr = inet_addr("172.17.0.6");
+        // 客户端发送的底层 UDP 数据报投递到本地测试服务端。
+        conn.sin_addr.s_addr = inet_addr("172.17.0.3");
         rst = sendto(BACKEND_UDPSOCKET_ID, packet_buf, packet_len, 0, (struct sockaddr*)&conn, sizeof(conn));
     }else{
         printf("请不要改动hostname...\n");
@@ -168,7 +168,7 @@ void startSimulation(){
 
 int cal_hash(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip, uint16_t remote_port){
     /*
-     * IPv4 地址是无符号数；172.17.0.5/6 的最高位为 1，转成有符号 int 后
+     * IPv4 地址是无符号数；172.17.0.2/3 的最高位为 1，转成有符号 int 后
      * 会成为负数。旧算法计算监听地址时返回 -11，导致 socket 表越界访问。
      * 使用 64 位无符号累加同时避免四元组求和溢出，取模结果始终位于
      * [0, MAX_SOCK - 1]。登记与收包查找共用本函数，索引规则保持一致。

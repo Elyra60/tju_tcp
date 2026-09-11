@@ -10,8 +10,8 @@ int main(int argc, char **argv) {
     // printf("my_tcp state %d\n", my_socket->state);
     
     tju_sock_addr target_addr;
-    // 客户端发起连接时，目标地址必须填写服务端在实验网络中的实际 IP。
-    target_addr.ip = inet_network("172.17.0.6");
+    // 本地测试环境中，客户端应连接到地址为 172.17.0.3 的服务端。
+    target_addr.ip = inet_network("172.17.0.3");
     target_addr.port = 1234;
 
     tju_connect(my_socket, target_addr);

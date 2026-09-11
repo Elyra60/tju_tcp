@@ -9,8 +9,8 @@ int main(int argc, char **argv) {
     // printf("my_tcp state %d\n", my_server->state);
     
     tju_sock_addr bind_addr;
-    // 服务端 socket 绑定到服务端在实验网络中的实际 IP。
-    bind_addr.ip = inet_network("172.17.0.6");
+    // 本地测试环境中，服务端 socket 绑定到 172.17.0.3。
+    bind_addr.ip = inet_network("172.17.0.3");
     bind_addr.port = 1234;
 
     tju_bind(my_server, bind_addr);
