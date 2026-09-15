@@ -16,10 +16,25 @@
 #define TJU_CLOSE_TIMEOUT 120
 #endif
 
-/* 保持课程框架原有的 MAX_DLEN 作为实际分段长度；发送上限与报文中
- * 16 位通告窗口的最大值一致，最终可用窗口还会取对端 rwnd 的较小值。 */
+/* 保持当前工程 MAX_DLEN=1375。未知对端窗口时的回退上限为 16 位最大值，
+ * 实际新数据发送始终还要受动态 cwnd 限制。 */
 #define RDT_SMSS MAX_DLEN
 #define RDT_SEND_WINDOW 65535U
+/* 平台配置尚未出现在本地文件中：允许通过 -D 指定字节值。
+ * 默认 IW 使用 RFC 5681 对当前 SMSS 的上限，不能误用现代 TCP 的 IW10。 */
+#define RENO_IW_LIMIT ((RDT_SMSS > 2190U ? 2U : (RDT_SMSS > 1095U ? 3U : 4U)) * RDT_SMSS)
+#ifndef TJU_INITIAL_CWND
+#define TJU_INITIAL_CWND RENO_IW_LIMIT
+#endif
+#ifndef TJU_INITIAL_SSTHRESH
+#define TJU_INITIAL_SSTHRESH 65535U
+#endif
+#if TJU_INITIAL_CWND < RDT_SMSS || TJU_INITIAL_CWND > RENO_IW_LIMIT
+#error "TJU_INITIAL_CWND must satisfy RFC 5681 IW bounds"
+#endif
+#if TJU_INITIAL_SSTHRESH < 2 * RDT_SMSS || TJU_INITIAL_SSTHRESH > 65535U
+#error "TJU_INITIAL_SSTHRESH must fit the course advertised window"
+#endif
 #define RDT_MIN_RTO_MS 1000U
 #define RDT_MAX_RTO_MS 60000U
 
@@ -75,6 +90,14 @@ typedef struct handshake_ctx {
     int duplicate_ack_count;
     int fast_recovery;               // 三次重复 ACK 后是否正在修复同一发送窗口
     uint32_t recovery_seq;            // 进入快速恢复时已经发送到的最高字节边界
+    uint32_t cwnd;                    // 字节单位，每连接独立，受 handshake_lock 保护
+    uint32_t ssthresh;                // 慢启动阈值；丢包时根据真实 FlightSize 更新
+    int congestion_state;            // 复用框架状态常量，不修改 global.h
+    uint64_t ca_acked_bytes;          // 拥塞避免累计确认字节，避免整数截断和 ACK 拆分加速
+    int reno_wait_ack;               // 基础快速重传后等待首次新 ACK，不做窗口膨胀
+    uint32_t traced_cwnd, traced_ssthresh;
+    int traced_congestion_type;
+    int have_congestion_trace;       // CWND/SSTHRESH 仅变化时输出，CC 保留每个原因快照
     int have_rtt_sample;
     double srtt_ms;
     double rttvar_ms;
@@ -144,19 +167,25 @@ static void trace_initialize_locked(void){
     char hostname[64] = {0};
     const char* role = NULL;
     char path[160] = {0};
+    const char* override_path = getenv("TJU_TRACE_PATH");
     if(gethostname(hostname, sizeof(hostname) - 1U) != 0) return;
     if(strcmp(hostname, "server") == 0) role = "server";
     else if(strcmp(hostname, "client") == 0) role = "client";
-    else return;
+    else if(!override_path || !override_path[0]) return;
 
-    snprintf(path, sizeof(path),
-        "/vagrant/tju_tcp/test/%s.event.trace", role);
-    trace_file = fopen(path, "w");
-    /* 非 Vagrant 环境下从 test 目录直接运行程序时使用当前目录作为回退；
-     * 自动测评环境始终会命中上面的规范绝对路径。 */
-    if(!trace_file){
-        snprintf(path, sizeof(path), "%s.event.trace", role);
+    /* 隔离实验可明确指定输出文件，避免覆盖课程 test 目录中的既有证据。 */
+    if(override_path && override_path[0]){
+        trace_file = fopen(override_path, "w");
+    }else{
+        snprintf(path, sizeof(path),
+            "/vagrant/tju_tcp/test/%s.event.trace", role);
         trace_file = fopen(path, "w");
+        /* 非 Vagrant 环境使用当前工作目录作为回退。隔离验证必须显式指定
+         * TJU_TRACE_PATH，不能依赖默认路径恰好不存在。 */
+        if(!trace_file){
+            snprintf(path, sizeof(path), "%s.event.trace", role);
+            trace_file = fopen(path, "w");
+        }
     }
     if(!trace_file){
         /* 日志失败应可见，但不能因此中断网络协议或向报文中添加诊断数据。 */
@@ -165,15 +194,7 @@ static void trace_initialize_locked(void){
     }
     setvbuf(trace_file, NULL, _IOFBF, 1024U * 1024U);
 
-    /* 拥塞控制尚未实现，因此 CWND 保持固定；流量控制会在后续窗口变化时继续
-     * 写入 RWND/SWND。窗口单位严格使用 byte，便于绘图脚本直接比较。 */
-    long long now = trace_utc_microseconds();
-    fprintf(trace_file, "[%lld] [CWND] [type:0 size:%u]\n",
-        now, RDT_SEND_WINDOW);
-    fprintf(trace_file, "[%lld] [RWND] [size:%u]\n",
-        now, (unsigned int)TCP_RECVWN_SIZE);
-    fprintf(trace_file, "[%lld] [SWND] [size:%u]\n",
-        now, RDT_SEND_WINDOW);
+    /* 初值由各连接创建路径记录，不再伪造固定 CWND/SWND。 */
     /* 初始窗口事件数量很少，立即落盘，确保仅运行连接测试时文件也非空。 */
     fflush(trace_file);
     trace_pending_lines = 0U;
@@ -261,6 +282,12 @@ static handshake_ctx_t* get_handshake(tju_tcp_t* sock){
         return NULL;
     }
     ctx->sock = sock;
+    ctx->cwnd = TJU_INITIAL_CWND;
+    ctx->ssthresh = TJU_INITIAL_SSTHRESH;
+    ctx->congestion_state = ctx->cwnd < ctx->ssthresh ?
+        SLOW_START : CONGESTION_AVOIDANCE;
+    trace_event("CWND", "type:%d size:%u", ctx->congestion_state, ctx->cwnd);
+    trace_event("SSTHRESH", "size:%u", ctx->ssthresh);
     /* 握手完成前不会发送应用数据。先采用 16 位窗口上限，收到 SYN/SYN-ACK
      * 中的真实通告值后再更新绝对右边界。 */
     ctx->peer_rwnd = UINT16_MAX;
@@ -396,15 +423,14 @@ static uint16_t receive_window_locked(handshake_ctx_t* ctx){
     return (uint16_t)window;
 }
 
-/* 返回发送方当前允许存在于网络中的字节数。第 5.5 节尚未实现时 CWND 等于
- * 固定发送上限；以后加入拥塞控制，只需把 RDT_SEND_WINDOW 换为动态 cwnd。 */
+/* 新数据同时受拥塞窗口与对端绝对窗口右边界约束。缩窗不会撤回已发数据。 */
 static uint32_t sender_effective_window_locked(handshake_ctx_t* ctx){
     uint32_t rwnd = RDT_SEND_WINDOW;
     if(ctx->peer_window_initialized){
         rwnd = seq_after(ctx->peer_window_right, ctx->snd_una) ?
             ctx->peer_window_right - ctx->snd_una : 0U;
     }
-    return rwnd < RDT_SEND_WINDOW ? rwnd : RDT_SEND_WINDOW;
+    return rwnd < ctx->cwnd ? rwnd : ctx->cwnd;
 }
 
 /* 仅在实际有效发送窗口改变时记录 SWND，避免为每个 ACK 重复写磁盘。 */
@@ -427,6 +453,11 @@ static void update_peer_window_locked(handshake_ctx_t* ctx, uint32_t ack,
     if(ctx->peer_window_initialized &&
        (seq_before(ack, ctx->snd_una) || seq_after(ack, ctx->snd_max))) return;
 
+    if(!ctx->peer_window_initialized || ctx->peer_rwnd != advertised_window ||
+       ctx->peer_window_right != ack + (uint32_t)advertised_window)
+        trace_event("PEER_WINDOW", "conn:%p ack:%u size:%u right:%u",
+            (void*)ctx->sock, ack, (unsigned int)advertised_window,
+            ack + (uint32_t)advertised_window);
     ctx->peer_rwnd = advertised_window;
     ctx->peer_window_right = ack + (uint32_t)advertised_window;
     ctx->peer_window_initialized = 1;
@@ -586,6 +617,64 @@ static uint32_t flight_size(handshake_ctx_t* ctx){
     return bytes;
 }
 
+/* CC 快照绑定连接和触发原因；RWND 原事件仍表示本地接收缓存，peer 字段
+ * 才是本连接发送方向收到的窗口。所有数值均来自锁内真实状态。 */
+static void trace_congestion(handshake_ctx_t* ctx, const char* reason, int type){
+    if(!ctx->have_congestion_trace || ctx->traced_cwnd != ctx->cwnd ||
+       ctx->traced_congestion_type != type)
+        trace_event("CWND", "type:%d size:%u", type, ctx->cwnd);
+    if(!ctx->have_congestion_trace || ctx->traced_ssthresh != ctx->ssthresh)
+        trace_event("SSTHRESH", "size:%u", ctx->ssthresh);
+    ctx->traced_cwnd = ctx->cwnd;
+    ctx->traced_ssthresh = ctx->ssthresh;
+    ctx->traced_congestion_type = type;
+    ctx->have_congestion_trace = 1;
+    trace_event("CC", "conn:%p reason:%s state:%d cwnd:%u ssthresh:%u peer:%u flight:%u ack:%u",
+        (void*)ctx->sock, reason, ctx->congestion_state, ctx->cwnd,
+        ctx->ssthresh, (unsigned int)ctx->peer_rwnd, flight_size(ctx), ctx->snd_una);
+    trace_sender_window_locked(ctx);
+}
+
+/* 丢包响应必须使用尚未累计确认的数据量，而不是排队长度或 cwnd。
+ * 基础 Reno 不膨胀窗口；已有 RDT 的部分 ACK 修复由 fast_recovery 独立维护。 */
+static void reno_loss(handshake_ctx_t* ctx, int timeout){
+    uint32_t half = flight_size(ctx) / 2U;
+    ctx->ssthresh = half > 2U * RDT_SMSS ? half : 2U * RDT_SMSS;
+    ctx->cwnd = timeout ? RDT_SMSS : ctx->ssthresh;
+    ctx->ca_acked_bytes = 0;
+    ctx->reno_wait_ack = !timeout;
+    ctx->congestion_state = timeout ? SLOW_START : FAST_RECOVERY;
+    if(timeout){
+        ctx->fast_recovery = 0;
+        ctx->duplicate_ack_count = 0;
+    }
+    trace_congestion(ctx, timeout ? "RTO" : "FAST_RETRANSMIT", timeout ? 3 : 2);
+}
+
+/* 仅确认新数据时调用。按字节计数防止把一个 ACK 拆成多个小 ACK 加速增长。
+ * CA 每累计确认当前 cwnd 字节增加一个 SMSS，一次 ACK 最多增长一次。
+ * 饱和到序号安全范围，绝不让 uint32_t 回绕造成窗口突然归零。 */
+static void reno_new_ack(handshake_ctx_t* ctx, uint32_t bytes){
+    uint32_t increment = 0;
+    if(ctx->reno_wait_ack){
+        ctx->reno_wait_ack = 0;
+        ctx->cwnd = ctx->ssthresh;
+        ctx->ca_acked_bytes = 0;
+    }else if(ctx->cwnd < ctx->ssthresh){
+        increment = bytes < RDT_SMSS ? bytes : RDT_SMSS;
+    }else{
+        ctx->ca_acked_bytes += bytes;
+        if(ctx->ca_acked_bytes >= ctx->cwnd){
+            ctx->ca_acked_bytes -= ctx->cwnd;
+            increment = RDT_SMSS;
+        }
+    }
+    if(increment > (uint32_t)INT_MAX - ctx->cwnd) ctx->cwnd = INT_MAX;
+    else ctx->cwnd += increment;
+    ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+    trace_congestion(ctx, "NEW_ACK", ctx->congestion_state);
+}
+
 static void transmit_segment(handshake_ctx_t* ctx, send_segment_t* seg,
                              int retransmission){
     char* packet = build_packet(ctx, seg->seq, ctx->rcv_nxt,
@@ -597,6 +686,10 @@ static void transmit_segment(handshake_ctx_t* ctx, send_segment_t* seg,
     seg->sent = 1;
     if(seq_after(seg->end_seq, ctx->snd_max)) ctx->snd_max = seg->end_seq;
     if(retransmission) seg->retransmitted = 1;
+    trace_event(retransmission ? "RETRANSMIT" : "FLIGHT",
+        "conn:%p seq:%u length:%d flight:%u cwnd:%u peer:%u",
+        (void*)ctx->sock, seg->seq, seg->len, flight_size(ctx), ctx->cwnd,
+        (unsigned int)ctx->peer_rwnd);
 }
 
 /*
@@ -612,6 +705,8 @@ static void transmit_window_probe(handshake_ctx_t* ctx){
     char* packet = build_packet(ctx, ctx->snd_una - 1U, ctx->rcv_nxt,
         ACK_FLAG_MASK, &probe_byte, 1);
     if(!packet) return;
+    trace_event("PROBE", "conn:%p ack:%u peer:%u", (void*)ctx->sock,
+        ctx->snd_una, (unsigned int)ctx->peer_rwnd);
     send_packet_traced(packet, DEFAULT_HEADER_LEN + 1);
     free(packet);
 }
@@ -683,6 +778,9 @@ static void* reliable_sender_worker(void* arg){
             clock_gettime(CLOCK_MONOTONIC, &now);
             double rto = ctx->rto_ms > 0 ? ctx->rto_ms : RDT_MIN_RTO_MS;
             if(elapsed_ms(ctx->retransmission_timer_at, now) >= rto){
+                trace_event("RTO", "conn:%p seq:%u rto_ms:%.3f flight:%u",
+                    (void*)ctx->sock, ctx->send_head->seq, rto, flight_size(ctx));
+                reno_loss(ctx, 1);
                 transmit_segment(ctx, ctx->send_head, 1);
                 ctx->rto_ms = rto * 2.0;
                 if(ctx->rto_ms > RDT_MAX_RTO_MS) ctx->rto_ms = RDT_MAX_RTO_MS;
@@ -808,6 +906,7 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
     /* snd_nxt 还包含已经入队但尚未发出的字节，只有不超过 snd_max 的 ACK 才有效。 */
     if(seq_after(ack, ctx->snd_max)) return;
     if(seq_after(ack, ctx->snd_una)){
+        uint32_t newly_acked = ack - ctx->snd_una;
         struct timespec now;
         int was_fast_recovery = ctx->fast_recovery;
         uint32_t recovery_seq = ctx->recovery_seq;
@@ -830,9 +929,23 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
             free(done->data);
             free(done);
         }
+        /* ACK 可以落在段内部：裁去已确认前缀，FlightSize 和重传都只包含余量。
+         * 未完整确认段不采 RTT，避免把同一发送实例多次用于估计。 */
+        if(ctx->send_head && ctx->send_head->sent &&
+           seq_after(ack, ctx->send_head->seq)){
+            send_segment_t* partial = ctx->send_head;
+            uint32_t prefix = ack - partial->seq;
+            if(partial->retransmitted) rtt_ambiguous = 1;
+            memmove(partial->data, partial->data + prefix, partial->len - prefix);
+            partial->len -= (int)prefix;
+            partial->seq = ack;
+            ctx->queued_bytes -= prefix;
+        }
         if(have_candidate && !rtt_ambiguous) update_rto(ctx, candidate_ms);
         if(!ctx->send_head) ctx->send_tail = NULL;
         ctx->snd_una = ack;
+        trace_event("ACK", "conn:%p ack:%u new:%u", (void*)ctx->sock, ack, newly_acked);
+        reno_new_ack(ctx, newly_acked);
         ctx->duplicate_ack = ack;
         ctx->duplicate_ack_count = 0;
         ctx->sock->sending_len = ctx->queued_bytes > INT_MAX ?
@@ -862,22 +975,27 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
              advertised_window_unchanged){
         /* 只有确认号与通告窗口都未变化时才是重复 ACK。窗口更新 ACK 不代表
          * 丢包，若错误计入三次重复确认会触发无意义的快速重传并破坏吞吐。 */
-        if(ctx->duplicate_ack == ack) ctx->duplicate_ack_count++;
+        if(ctx->duplicate_ack == ack){
+            if(ctx->duplicate_ack_count < 3) ctx->duplicate_ack_count++;
+        }
         else{
             ctx->duplicate_ack = ack;
             ctx->duplicate_ack_count = 1;
         }
-        if(ctx->duplicate_ack_count >= 3){
-            if(!ctx->fast_recovery){
-                ctx->fast_recovery = 1;
-                ctx->recovery_seq = ctx->snd_max;
-            }
+        trace_event("DUPACK", "conn:%p ack:%u count:%d", (void*)ctx->sock,
+            ack, ctx->duplicate_ack_count);
+        if(ctx->duplicate_ack_count == 3 && !ctx->fast_recovery){
+            reno_loss(ctx, 0);
+            ctx->fast_recovery = 1;
+            ctx->recovery_seq = ctx->snd_max;
             transmit_segment(ctx, ctx->send_head, 1);
             clock_gettime(CLOCK_MONOTONIC, &ctx->retransmission_timer_at);
             ctx->retransmission_timer_running = 1;
-            ctx->duplicate_ack_count = 0;
+            /* 同一恢复窗口不因后续每组三个重复 ACK 再次减半或重传。 */
         }
     }else if(ack == ctx->snd_una && !advertised_window_unchanged){
+        trace_event("ACK", "conn:%p reason:NON_DUPLICATE ack:%u peer:%u",
+            (void*)ctx->sock, ack, (unsigned int)ctx->peer_rwnd);
         ctx->duplicate_ack = ack;
         ctx->duplicate_ack_count = 0;
     }
@@ -1282,6 +1400,9 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
         send_control(ctx, ctx->snd_nxt, ctx->rcv_nxt, ACK_FLAG_MASK);
         /* 第三次握手 ACK 数量不足以触发批量阈值，主动刷新以完整保留握手。 */
         trace_flush_pending();
+        if(ctx->syn_was_retransmitted) ctx->cwnd = RDT_SMSS;
+        ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+        trace_congestion(ctx, "HANDSHAKE", ctx->congestion_state);
         sock->state = ESTABLISHED;
         pthread_cond_broadcast(&handshake_cond);
         pthread_mutex_unlock(&handshake_lock);
@@ -1308,6 +1429,9 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
                 ctx->rto_ms = 3000.0;
             }
             update_peer_window_locked(ctx, ack, advertised_window);
+            if(ctx->syn_was_retransmitted) ctx->cwnd = RDT_SMSS;
+            ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+            trace_congestion(ctx, "HANDSHAKE", ctx->congestion_state);
             trace_sender_window_locked(ctx);
             sock->state = ESTABLISHED;
             ctx->queued_for_accept = 1;
@@ -1348,7 +1472,10 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
             ctx->peer_rwnd == advertised_window &&
             ctx->peer_window_right == ack + (uint32_t)advertised_window;
         update_peer_window_locked(ctx, ack, advertised_window);
-        process_ack_locked(ctx, ack, window_unchanged);
+        /* 带数据或 FIN 的 ACK 不满足 RFC 5681 重复 ACK 定义；新累计 ACK
+         * 仍正常处理，仅禁止其进入重复 ACK 计数分支。 */
+        process_ack_locked(ctx, ack, window_unchanged && data_len == 0 &&
+            !(flags & FIN_FLAG_MASK));
         trace_sender_window_locked(ctx);
     }
     if((flags & ACK_FLAG_MASK) && ctx->fin_sent && ack == ctx->fin_seq + 1U){

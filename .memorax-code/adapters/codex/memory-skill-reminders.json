@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "runtime": "codex",
+  "sessions": {
+    "01a085ff-e022-79d1-8842-6894f0c36278": {
+      "turnCount": 1,
+      "lastTurnId": "01a09d72-391b-7c62-b3be-23aa2b928fd0",
+      "lastSeenAt": "2026-09-14T01:05:11.805Z"
+    },
+    "01a09d78-54f5-7d03-95dc-77f2db43a38d": {
+      "turnCount": 9,
+      "lastTurnId": "01a0a44b-1df2-7540-b940-975adbdf6a12",
+      "lastSeenAt": "2026-09-15T08:59:42.492Z",
+      "supplementalReminderPending": false
+    }
+  },
+  "updatedAt": "2026-09-15T08:59:42.492Z"
+}
