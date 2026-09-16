@@ -1,0 +1,28 @@
+{
+  "scores": {
+    "reliable_data_transfer": 100.0,
+    "establish_connection": 100,
+    "close_connection": 100
+  },
+  "received_bytes": 50000000,
+  "verified_blocks": 5000,
+  "max_rdt_flight": 43125,
+  "rdt_integrations": 10,
+  "additional_reno_close_cases": 3,
+  "report_source_locations": 53,
+  "reno": {
+    "production_source_hashes_checked": 18,
+    "regression": "regression_20260916_204437",
+    "network": "network_20260916_204158",
+    "integration_passed": 14,
+    "sanitized_unit_modes_passed": 2,
+    "sanitized_recovery_assertion_groups_passed": 4,
+    "course_programs_compiled": 5,
+    "network_cases_passed": 8,
+    "cc_snapshots_checked": 1736,
+    "single_loss_new_segments_in_recovery": 4,
+    "single_loss_rto": 0,
+    "status": "PASS"
+  },
+  "status": "PASS"
+}

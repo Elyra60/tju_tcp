@@ -1,0 +1,1 @@
+PASS integration fin_ack_loss: 200000 bytes identical, handshake, window bounds, draining close; dropped=1

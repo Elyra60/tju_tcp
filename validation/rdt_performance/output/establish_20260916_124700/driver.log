@@ -1,0 +1,77 @@
+====================================================================
+============================开始测试================================
+====================================================================
+[自动测试] 编译提交源码
+> cd /vagrant/tju_tcp && make
+rm -f ./build/*.o client server
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/tju_packet.o src/tju_packet.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/kernel.o src/kernel.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/tju_tcp.o src/tju_tcp.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 ./src/server.c -o server ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 ./src/client.c -o client ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o  
+
+
+[自动测试] 编译测试源码
+> cd /vagrant/tju_tcp/test && make
+rm -f test_client test_server rdt_server rdt_client close_client client.log server.log rdt_server.log rdt_client.log
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_client.c -o test_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_server.c -o test_server ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_rdt_server.c -o rdt_server ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_rdt_client.c -o rdt_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+./test_rdt_client.c: In function ‘main’:
+./test_rdt_client.c:37:5: warning: implicit declaration of function ‘fstat’ [-Wimplicit-function-declaration]
+   37 |     fstat(fd, &st);
+      |     ^~~~~
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_close_client.c -o close_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+
+
+============================ 建立连接的测试(服务端) ================================
+
+[建立连接测试] 开启服务端和客户端 将输出重定向到文件
+
+[数据传输测试] 设置双方的网络通讯速率 丢包率 和延迟
+
+[建立连接测试] 等待8s测试结束 测试服务端时三次握手应该在6s内完成
+
+[建立连接测试] 打印文件里面的日志
+===================================================
+[客户端] 由于丢包, 测试程序未能在规定时间内发送第一次握手的SYN数据包, 请再次尝试打分
+{{TEST FAILED}}
+===================================================
+
+[建立连接测试] 对服务端进行评分 若正确发送第二次握手SYN|ACK数据包 则+40分
+[建立连接测试] 测试结果解析出错
+
+[建立连接测试] 服务端建立连接部分的得分为 0 分 (满分40分)
+
+============================ 建立连接的测试(客户端) ================================
+
+[建立连接测试] 开启服务端和客户端 将输出重定向到文件
+
+[数据传输测试] 设置双方的网络通讯速率 丢包率 和延迟
+
+[建立连接测试] 等待8s测试结束 测试客户端时三次握手应该在6s内完成
+
+[建立连接测试] 打印文件里面的日志
+===================================================
+[服务端] 收到一个TCP数据包
+[服务端] 客户端发送的第一个SYN报文检验通过
+{{GET SYN SCORE}}
+[服务端] 发送SYNACK 等待客户端第三次握手的ACK
+[服务端] 收到一个TCP数据包
+[服务端] 客户端发送的ACK报文检验通过, 成功建立连接
+{{GET ACK SCORE}}
+{{TEST SUCCESS}}
+===================================================
+
+[建立连接测试] 对客户端进行评分 若正确发送第一次握手SYN数据包 则+20分 若正确响应SYNACK 则+40分
+
+[建立连接测试] 客户端建立连接部分的得分为 60 分 (满分60分)
+
+[建立连接测试] 建立连接部分的得分为 60 分 (满分100分)
+===========================================================================
+===========================================================================
+
+
+========================= 各项测试项目得分汇总 ============================
+{"scores": {"establish_connection": 60}}

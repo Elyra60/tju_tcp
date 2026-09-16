@@ -8,7 +8,7 @@ cp src/*.c "$out/source/src/"; cp inc/*.h "$out/source/inc/"
 cp validation/performance/{run.sh,endpoint.c} "$out/source/"
 sha256sum src/*.c inc/*.h validation/performance/{run.sh,endpoint.c} > "$out/build.sha256"
 uname -a > "$out/environment.txt"; gcc --version >> "$out/environment.txt"; tc -V >> "$out/environment.txt"
-gcc -pthread -fcommon -O2 -DTJU_MSL=1 -Iinc validation/performance/endpoint.c src/tju_tcp.c src/tju_packet.c src/kernel.c -o "$out/endpoint"
+gcc -pthread -fcommon -O2 -DTJU_FULL_RENO=0 -DTJU_MSL=1 -Iinc validation/performance/endpoint.c src/tju_tcp.c src/tju_packet.c src/kernel.c -o "$out/endpoint"
 c="perf-c-$$"; s="perf-s-$$"; pids=()
 cleanup(){ for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; ip netns del "$c" 2>/dev/null || true; ip netns del "$s" 2>/dev/null || true; }
 trap cleanup EXIT

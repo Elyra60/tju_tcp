@@ -2,10 +2,16 @@
 from pathlib import Path
 import hashlib
 import json
+import argparse
 
 repo=Path(__file__).resolve().parents[2]
 out=repo/'validation/full_reno/output'
-runs=['regression_20260915_232959','network_20260915_233439']
+parser=argparse.ArgumentParser()
+parser.add_argument('--regression',default='regression_20260916_204437')
+parser.add_argument('--network',default='network_20260916_204158')
+parser.add_argument('--output',default='rdt_fix_20260916_audit.json')
+args=parser.parse_args()
+runs=[args.regression,args.network]
 hashes=0
 for name in runs:
     for line in (out/name/'build_sources.sha256').read_text().splitlines():
@@ -41,5 +47,5 @@ result={'production_source_hashes_checked':hashes,'regression':runs[0],'network'
         'network_cases_passed':8,'cc_snapshots_checked':sum(s['updates'] for s in summary),
         'single_loss_new_segments_in_recovery':full['new_in_recovery'],
         'single_loss_rto':full['rto'],'status':'PASS'}
-(out/'final_audit.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+(out/args.output).write_text(json.dumps(result,indent=2),encoding='utf-8')
 print(json.dumps(result,indent=2))

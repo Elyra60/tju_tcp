@@ -15,6 +15,7 @@ static int test_hostname(char* name, size_t length){
 static unsigned transmissions;
 static int network_enabled;
 static int drop_syn, drop_synack, drop_data, data_number, dropped;
+static int drop_fin, drop_fin_ack, drop_final_ack, client_fin_seen, server_fin_seen;
 typedef struct wire_packet { char* data; struct wire_packet* next; } wire_packet;
 static wire_packet *wire_head, *wire_tail;
 static pthread_mutex_t wire_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -28,6 +29,20 @@ void sendToLayer3(char* packet, int length){
     transmissions++;
     if(!network_enabled) return;
     uint16_t payload = get_plen(packet) - get_hlen(packet);
+    uint8_t flags = get_flags(packet);
+    if(flags & FIN_FLAG_MASK){
+        if(get_src(packet)==5678){
+            client_fin_seen=1;
+            if(drop_fin){drop_fin=0;dropped++;return;}
+        }else server_fin_seen=1;
+    }else if(flags==ACK_FLAG_MASK && !payload){
+        if(get_src(packet)!=5678 && client_fin_seen && drop_fin_ack){
+            drop_fin_ack=0;dropped++;return;
+        }
+        if(get_src(packet)==5678 && server_fin_seen && drop_final_ack){
+            drop_final_ack=0;dropped++;return;
+        }
+    }
     /* 在真正发送新数据前检查窗口，重传不重复计入 FlightSize。 */
     for(handshake_ctx_t* ctx = handshake_list; ctx; ctx = ctx->next){
         if(ctx->sock->established_local_addr.port == get_src(packet) && payload &&
@@ -158,6 +173,9 @@ static void* close_socket(void* sock){
     return NULL;
 }
 static void integration(const char* mode){
+    drop_fin=strcmp(mode,"fin_loss")==0;
+    drop_fin_ack=strcmp(mode,"fin_ack_loss")==0;
+    drop_final_ack=strcmp(mode,"final_ack_loss")==0;
     drop_syn = strcmp(mode, "syn_loss") == 0;
     drop_synack = strcmp(mode, "synack_loss") == 0;
     drop_data = strcmp(mode, "rto") == 0 ? 1 : (strcmp(mode, "multi_loss") == 0 ? 12 : 0);
@@ -176,8 +194,8 @@ static void integration(const char* mode){
     tju_tcp_t* server = tju_accept(listener);
     assert(server);
     pthread_mutex_lock(&handshake_lock);
-    assert(find_handshake(client)->cwnd == (handshake_loss ? RDT_SMSS : TJU_INITIAL_CWND));
-    assert(find_handshake(server)->cwnd == (server_handshake_loss ? RDT_SMSS : TJU_INITIAL_CWND));
+    assert(find_handshake(client)->cwnd == (TJU_RDT_PROFILE ? TCP_RECVWN_SIZE : (handshake_loss ? RDT_SMSS : TJU_INITIAL_CWND)));
+    assert(find_handshake(server)->cwnd == (TJU_RDT_PROFILE ? TCP_RECVWN_SIZE : (server_handshake_loss ? RDT_SMSS : TJU_INITIAL_CWND)));
     pthread_mutex_unlock(&handshake_lock);
     size_t total = 200000;
     char* data = malloc(total);
@@ -219,7 +237,14 @@ static void integration(const char* mode){
         assert(tju_recv(server, received, 1) == 0);
         assert(tju_close(server) == 0);
     }
-    sleep(3);
+    /* 最终ACK丢失会在FIN重传后重启2MSL，不能固定3秒就判失败。 */
+    for(int i=0;i<800;i++){
+        pthread_mutex_lock(&handshake_lock);
+        int closed=client->state==CLOSED && server->state==CLOSED;
+        pthread_mutex_unlock(&handshake_lock);
+        if(closed) break;
+        usleep(10000);
+    }
     pthread_mutex_lock(&handshake_lock);
     assert(client->state == CLOSED && server->state == CLOSED);
     assert(!find_handshake(client)->failed && !find_handshake(server)->failed);

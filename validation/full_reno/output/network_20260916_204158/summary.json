@@ -1,0 +1,193 @@
+[
+  {
+    "case": "mode_0_no_loss",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 0.586848,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_rto",
+    "updates": 218,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 1,
+    "seconds": 1.932468,
+    "keys": [
+      {
+        "line": 25,
+        "time": 1.003625,
+        "reason": "RTO",
+        "cwnd": 1375,
+        "ssthresh": 2750,
+        "flight": 4125,
+        "peer": 44000
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_single_loss",
+    "updates": 207,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 0,
+    "seconds": 0.824367,
+    "keys": [
+      {
+        "line": 171,
+        "time": 0.123951,
+        "reason": "FAST_RETRANSMIT",
+        "cwnd": 9625,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 44000
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_small_rwnd",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 2.313471,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_no_loss",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 0.587775,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_rto",
+    "updates": 218,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 1,
+    "seconds": 1.961559,
+    "keys": [
+      {
+        "line": 25,
+        "time": 1.044353,
+        "reason": "RTO",
+        "cwnd": 1375,
+        "ssthresh": 2750,
+        "flight": 4125,
+        "peer": 44000
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_single_loss",
+    "updates": 217,
+    "new_in_recovery": 4,
+    "retransmit": 1,
+    "rto": 0,
+    "seconds": 0.88338,
+    "keys": [
+      {
+        "line": 160,
+        "time": 0.127514,
+        "reason": "FAST_RETRANSMIT",
+        "cwnd": 11000,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 167,
+        "time": 0.127554,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 12375,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 172,
+        "time": 0.127557,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 13750,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 177,
+        "time": 0.127559,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 15125,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 182,
+        "time": 0.127561,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 16500,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 187,
+        "time": 0.127563,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 17875,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 192,
+        "time": 0.127564,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 19250,
+        "ssthresh": 6875,
+        "flight": 13750,
+        "peer": 41250
+      },
+      {
+        "line": 206,
+        "time": 0.169271,
+        "reason": "RECOVERY_ACK",
+        "cwnd": 6875,
+        "ssthresh": 6875,
+        "flight": 5500,
+        "peer": 30250
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_small_rwnd",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 2.317619,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  }
+]

@@ -4,7 +4,17 @@ SRC_DIR = $(TOP_DIR)/src
 BUILD_DIR = $(TOP_DIR)/build
 
 CC=gcc
-FLAGS = -pthread -g -ggdb -DDEBUG -I$(INC_DIR)
+PROFILE ?= rdt
+ifeq ($(PROFILE),rdt)
+PROFILE_FLAGS = -DTJU_RDT_PROFILE=1
+else ifeq ($(PROFILE),reno)
+PROFILE_FLAGS = -DTJU_RDT_PROFILE=0 -DTJU_FULL_RENO=1
+else ifeq ($(PROFILE),basic)
+PROFILE_FLAGS = -DTJU_RDT_PROFILE=0 -DTJU_FULL_RENO=0
+else
+$(error PROFILE must be rdt, reno or basic)
+endif
+FLAGS = -pthread -g -ggdb -DDEBUG -I$(INC_DIR) $(PROFILE_FLAGS)
 OBJS = $(BUILD_DIR)/tju_packet.o \
 	   $(BUILD_DIR)/kernel.o \
 	   $(BUILD_DIR)/tju_tcp.o 

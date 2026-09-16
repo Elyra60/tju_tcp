@@ -1,0 +1,14 @@
+{
+  "production_source_hashes_checked": 18,
+  "regression": "regression_20260916_164316",
+  "network": "network_20260916_164448",
+  "integration_passed": 14,
+  "sanitized_unit_modes_passed": 2,
+  "sanitized_recovery_assertion_groups_passed": 4,
+  "course_programs_compiled": 5,
+  "network_cases_passed": 8,
+  "cc_snapshots_checked": 1736,
+  "single_loss_new_segments_in_recovery": 6,
+  "single_loss_rto": 0,
+  "status": "PASS"
+}

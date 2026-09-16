@@ -1,0 +1,2 @@
+INJECT_DROP packet=12 seq=2935613591 length=1375
+PASS client bytes=300000

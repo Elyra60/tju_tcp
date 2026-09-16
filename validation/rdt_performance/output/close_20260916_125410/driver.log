@@ -1,0 +1,108 @@
+====================================================================
+============================开始测试================================
+====================================================================
+[自动测试] 编译提交源码
+> cd /vagrant/tju_tcp && make
+rm -f ./build/*.o client server
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/tju_packet.o src/tju_packet.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/kernel.o src/kernel.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 -c -o build/tju_tcp.o src/tju_tcp.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 ./src/server.c -o server ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I./inc -DTJU_RDT_PROFILE=1 ./src/client.c -o client ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o  
+
+
+[自动测试] 编译测试源码
+> cd /vagrant/tju_tcp/test && make
+rm -f test_client test_server rdt_server rdt_client close_client client.log server.log rdt_server.log rdt_client.log
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_client.c -o test_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_server.c -o test_server ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_rdt_server.c -o rdt_server ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_rdt_client.c -o rdt_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+./test_rdt_client.c: In function ‘main’:
+./test_rdt_client.c:37:5: warning: implicit declaration of function ‘fstat’ [-Wimplicit-function-declaration]
+   37 |     fstat(fd, &st);
+      |     ^~~~~
+gcc -pthread -g -ggdb -DDEBUG -I../inc ./test_close_client.c -o close_client ../build/tju_packet.o ../build/kernel.o ../build/tju_tcp.o 
+
+========================== 断开连接的测试 =============================
+======= 测试双方先后关闭连接的情况 =======
+[双方先后关闭测试] 开启服务端和客户端 将输出重定向到文件
+
+[双方先后关闭测试] 等待12s测试结束 三次握手以及四次挥手放在一起应该在12s内完成
+
+[双方先后关闭测试] 打印文件里面的日志
+===================================================
+===================server 日志=====================
+[服务端] 测试双方先后断开连接的情况
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-2128490061 ack=0 flags=8
+[服务端] 此时服务器状态为 LISTEN, 检查SYN数据包
+[服务端] 客户端发送的第一个SYN报文检验通过
+[服务端] 发送SYNACK 进入SYN_RECV状态 等待客户端第三次握手的ACK
+[服务端] 发送SYNACK src=1324 dst=5678 seq=646 ack=-2128490060 flags=12
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-2128490060 ack=647 flags=4
+[服务端] 此时服务器状态为 SYN_RECV, 检查ACK数据包
+[服务端] 客户端发送的ACK报文检验通过, 成功建立连接, 服务端状态转为ESTABLISHED
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-2128490060 ack=647 flags=6
+[服务端] 此时服务器状态为 ESTABLISHED/FIN_WAIT_1, 检查FIN数据包
+[服务端] 客户端发送的FIN报文检验通过
+{{FIRST FIN PASSED TEST}}
+[服务端] 模拟正常双方先后断开连接情况 服务端先响应��户端的FIN 发送ACK 然后等待1s 发FIN ACK
+[服务端] 发送ACK src=1324 dst=5678 seq=647 ack=-2128490059 flags=4
+[服务端] 发送FINACK src=1324 dst=5678 seq=647 ack=-2128490059 flags=6
+[服务端] 状态转为 LAST_ACK
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-2128490059 ack=648 flags=4
+[服务端] 此时服务器状态为 LAST_ACK/CLOSING, 检查ACK数据包
+[服务端] 客户端发送的ACK报文检验通过
+{{FINAL ACK PASSED TEST}}
+===================client 日志=====================
+[断开连接测试-客户端] 调用 tju_close
+[断开连接测试-客户端] 等待10s确保连接完全断开
+===================================================
+
+[双方先后关闭测试] 进行评分 
+
+[双方先后关闭测试] 双方先后关闭测试部分的得分为 60 分 (满分60分)
+
+
+======= 测试双方同时关闭连接的情况 =======
+[双方同时关闭测试] 开启服务端和客户端 将输出重定向到文件
+
+[双方同时关闭测试] 等待12s测试结束 三次握手以及四次挥手放在一起应该在12s内完成
+
+[双方同时关闭测试] 打印文件里面的日志
+===================================================
+===================server 日志=====================
+[服务端] 测试双方同时断开连接的情况
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-1201131399 ack=0 flags=8
+[服务端] 此时服务器状态为 LISTEN, 检查SYN数据包
+[服务端] 客户端发送的第一个SYN报文检验通过
+[服务端] 发送SYNACK 进入SYN_RECV状态 等待客户端第三次握手的ACK
+[服务端] 发送SYNACK src=1324 dst=5678 seq=646 ack=-1201131398 flags=12
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-1201131398 ack=647 flags=4
+[服务端] 此时服务器状态为 SYN_RECV, 检查ACK数据包
+[服务端] 客户端发送的ACK报文检验通过, 成功建立连接, 服务端状态转为ESTABLISHED
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-1201131398 ack=647 flags=6
+[服务端] 此时服务器状态为 ESTABLISHED/FIN_WAIT_1, 检查FIN数据包
+[服务端] 客户端发送的FIN报文检验通过
+{{FIRST FIN PASSED TEST}}
+[服务端] 模拟正常双方同时断开连接情况 服务端假装没��收到FIN包 先按照没有收到FIN的情况发FIN
+[服务端] 然后再收到客户端的FIN, 发送ACK响应
+[服务端] 发送FINACK src=1324 dst=5678 seq=647 ack=-1201131398 flags=6
+[服务端] 发送ACK src=1324 dst=5678 seq=648 ack=-1201131397 flags=4
+[服务端] 状态转为 CLOSING
+[服务端] 收到一个TCP数据包 src=5678 dst=1234 seq=-1201131398 ack=647 flags=6
+[服务端] 此时服务器状态为 LAST_ACK/CLOSING, 检查ACK数据包
+[服务端] 收到的ACK包的seqnum应该等于自己最开始发的FINACK的seqnum+1(-1201131397) 而实际是-1201131398
+===================client 日志=====================
+[断开连接测试-客户端] 调用 tju_close
+[断开连接测试-客户端] 等待10s确保连接完全断开
+===================================================
+
+[双方同时关闭测试] 进行评分 
+
+[双方同时关闭测试] 双方同时关闭测试部分的得分为 20 分 (满分40分)
+[断开连接的测试] 两种情况的总得分为 80 分 (满分100分)
+
+
+========================= 各项测试项目得分汇总 ============================
+{"scores": {"close_connection":80}}

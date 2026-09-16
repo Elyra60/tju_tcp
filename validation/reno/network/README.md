@@ -6,12 +6,13 @@
 
 | 场景 | 实验设计 | 实际证据（窗口单位：字节） | 核算次数 |
 |---|---|---|---|
-| no_loss_clean | 无丢包，传输 100000 字节 | cwnd 从 4125 慢启动到阈值 22000，再以拥塞避免增长到 26125；没有接收窗口限制快照 | 74 |
+| slow_start | 无丢包，传输 20000 字节，阈值65535 | cwnd从4125增至24125，无RTO或重传 | 16 |
+| congestion_avoidance | 无丢包，传输 100000 字节 | cwnd 从 4125 慢启动到阈值 22000，再以拥塞避免增长到 26125；没有接收窗口限制快照 | 74 |
 | rto | 丢弃第 1 个数据包，传输 300000 字节 | 1 次 RTO、1 次重传；FlightSize=4125，ssthresh=max(4125/2,2750)=2750，cwnd=1375 | 219 |
 | triple_ack | 丢弃第 12 个数据包，传输 300000 字节 | 3 次重复 ACK 触发快速重传；FlightSize=19250，ssthresh=cwnd=9625；新 ACK 后进入拥塞避免；没有 RTO | 208 |
 | small_rwnd | 通告窗口上限 5500，传输 300000 字节 | cwnd 最大 35750，实际 FlightSize 最大 5500；没有 RTO 或重传 | 220 |
 
-RTO 关键快照位于该组客户端 Trace 第 25 行，距首次数据发送约 1.047711 秒；快速重传关键快照位于对应 Trace 第 165 行，约 0.130434 秒。全部窗口更新的原始行号、更新前后数值和核算公式保存在各组 window_updates.md / window_updates.json。
+RTO关键快照位于rto/test/client.event.trace第25行，距首次数据发送1.051427秒；快速重传位于triple_ack/test/client.event.trace第156行，0.134916秒。以上均对应output/report7_20260915_153313。全部窗口更新的原始行号、数值和核算公式保存在各组window_updates.md / window_updates.json。
 
 ## 环境与隔离
 
@@ -47,10 +48,10 @@ analyze.py 根据实际 SEND 序号和累计 ACK 独立重建 FlightSize，再�
 在已安装 gcc、iproute2、tcpdump 的 Linux/WSL 中，从项目根目录以具备网络命名空间权限的身份运行：
 
 ```bash
-bash validation/reno/network/run.sh
+bash validation/reno/network/run_report.sh
 ```
 
-该命令会覆盖专用 output/verified 下同名实验输出；若需保留复测证据，请先另行备份该输出目录。不会调用会写入原 test 的完整课程测试驱动。可设置 RENO_SCENARIOS 选择单组。分析需要 matplotlib、numpy、scapy 和可用中文字体：
+该命令每次生成新的时间戳目录，不覆盖历史证据，不调用会写原test的课程驱动。当前脚本显式设置-DTJU_FULL_RENO=0，防止生产默认完整Reno改变基础模式口径。analyze_report.py仍绑定历史目录，分析新运行须将root改为新目录。历史git_head.txt仅为工作区基线，实际输入以source_snapshot和build_sources.sha256为准。分析需要matplotlib、numpy、scapy和可用中文字体：
 
 ```text
 python validation/reno/network/analyze.py --deps <已安装依赖的目录>

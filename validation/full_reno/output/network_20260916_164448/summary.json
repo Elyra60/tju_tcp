@@ -1,0 +1,229 @@
+[
+  {
+    "case": "mode_0_no_loss",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 0.59684,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_rto",
+    "updates": 218,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 1,
+    "seconds": 1.925299,
+    "keys": [
+      {
+        "line": 25,
+        "time": 1.002695,
+        "reason": "RTO",
+        "cwnd": 1375,
+        "ssthresh": 2750,
+        "flight": 4125,
+        "peer": 44000
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_single_loss",
+    "updates": 207,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 0,
+    "seconds": 0.836181,
+    "keys": [
+      {
+        "line": 167,
+        "time": 0.130606,
+        "reason": "FAST_RETRANSMIT",
+        "cwnd": 9625,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_0_small_rwnd",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 2.322819,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_no_loss",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 0.599061,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_rto",
+    "updates": 218,
+    "new_in_recovery": 0,
+    "retransmit": 1,
+    "rto": 1,
+    "seconds": 1.960822,
+    "keys": [
+      {
+        "line": 25,
+        "time": 1.044299,
+        "reason": "RTO",
+        "cwnd": 1375,
+        "ssthresh": 2750,
+        "flight": 4125,
+        "peer": 44000
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_single_loss",
+    "updates": 217,
+    "new_in_recovery": 6,
+    "retransmit": 1,
+    "rto": 0,
+    "seconds": 0.822939,
+    "keys": [
+      {
+        "line": 168,
+        "time": 0.129663,
+        "reason": "FAST_RETRANSMIT",
+        "cwnd": 13750,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 175,
+        "time": 0.129708,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 15125,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 180,
+        "time": 0.129738,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 16500,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 185,
+        "time": 0.129773,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 17875,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 190,
+        "time": 0.129847,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 19250,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 195,
+        "time": 0.129886,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 20625,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 200,
+        "time": 0.129917,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 22000,
+        "ssthresh": 9625,
+        "flight": 19250,
+        "peer": 42625
+      },
+      {
+        "line": 209,
+        "time": 0.16744,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 23375,
+        "ssthresh": 9625,
+        "flight": 22000,
+        "peer": 42625
+      },
+      {
+        "line": 214,
+        "time": 0.167518,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 24750,
+        "ssthresh": 9625,
+        "flight": 22000,
+        "peer": 42625
+      },
+      {
+        "line": 223,
+        "time": 0.170001,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 26125,
+        "ssthresh": 9625,
+        "flight": 24750,
+        "peer": 42625
+      },
+      {
+        "line": 230,
+        "time": 0.172105,
+        "reason": "DUPACK_INFLATE",
+        "cwnd": 27500,
+        "ssthresh": 9625,
+        "flight": 26125,
+        "peer": 42625
+      },
+      {
+        "line": 238,
+        "time": 0.172212,
+        "reason": "RECOVERY_ACK",
+        "cwnd": 9625,
+        "ssthresh": 9625,
+        "flight": 8250,
+        "peer": 24750
+      }
+    ],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  },
+  {
+    "case": "mode_1_small_rwnd",
+    "updates": 219,
+    "new_in_recovery": 0,
+    "retransmit": 0,
+    "rto": 0,
+    "seconds": 2.315333,
+    "keys": [],
+    "pcap_data": 219,
+    "sha256": "fb873330032d68cdf798d2c2f7dea87c75b64b39bc8a0cbe9dec7c0caf9ec024"
+  }
+]

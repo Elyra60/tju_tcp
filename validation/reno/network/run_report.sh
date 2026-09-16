@@ -38,7 +38,7 @@ for mode in slow_start congestion_avoidance rto triple_ack small_rwnd; do
     congestion_avoidance) bytes=100000;;
     rto) drop=1;; triple_ack) drop=12;; small_rwnd) cap=5500;;
   esac
-  gcc -pthread -fcommon -g -DTJU_MSL=1 -DTJU_INITIAL_SSTHRESH="$threshold" -Iinc validation/reno/network/endpoint.c src/tju_tcp.c src/tju_packet.c src/kernel.c -o "$dir/endpoint"
+  gcc -pthread -fcommon -g -DTJU_FULL_RENO=0 -DTJU_MSL=1 -DTJU_INITIAL_SSTHRESH="$threshold" -Iinc validation/reno/network/endpoint.c src/tju_tcp.c src/tju_packet.c src/kernel.c -o "$dir/endpoint"
   printf 'mode=%s bytes=%s IW=4125 ssthresh=%s SMSS=1375 MSL=1 delay_each=20ms rate=100Mbit drop_data=%s cap_window=%s\n' "$mode" "$bytes" "$threshold" "$drop" "$cap" > "$dir/config.txt"
   ip netns exec "$server_ns" tcpdump -i reno-s -s 0 -U -w "$dir/server.pcap" udp port 20218 > "$dir/capture.log" 2>&1 &
   capture=$!; pids+=("$capture")

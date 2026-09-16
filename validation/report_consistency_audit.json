@@ -1,0 +1,950 @@
+{
+  "report": "C:\\Users\\tudin\\Desktop\\Study\\2026-2027-1\\Computer Network Project\\3525058909_陶鑫涛_课程报告_完整Reno最终复核版.docx",
+  "section_text": {
+    "one": [
+      "一、报告摘要",
+      "【填写提示】第三阶段完成，建议300—500字。概括问题、TJU_TCP的教学简化范围、主要设计与实现、基础Reno必做内容、测试条件、主要结果和局限性。不要在摘要中声称实现了未完成的内容。",
+      "关键词：TJU_TCP；可靠数据传输；流量控制；基础Reno；AI辅助开发（学生可调整）"
+    ],
+    "three": [
+      "三、已有编程框架的代码架构分析（第一阶段）",
+      "3.1 环境搭建与基线运行",
+      "3.2 项目结构、模块功能与修改限制",
+      "项目采用inc/与src/分离结构，通过Makefile编译公共协议模块，并分别生成server和client。模块职责、入口、实现边界和修改限制见下表。",
+      "3.2.1 项目目录结构",
+      "tju_tcp/{Makefile, inc/, src/, build/, server, client}",
+      "inc/保存公共数据结构和接口声明，src/保存应用入口、协议实现、报文处理和UDP模拟代码，build/保存目标文件。",
+      "3.2.2 目录与模块说明",
+      "3.2.3 构建过程",
+      "项目使用GCC进行编译，公共编译参数为：",
+      "-pthread -g -ggdb -DDEBUG -I./inc",
+      "执行：",
+      "cd /vagrant/tju_tcp",
+      "make",
+      "实际构建顺序为：",
+      "在/vagrant/tju_tcp执行make，构建过程先清理旧产物，再将tju_packet.c、kernel.c和tju_tcp.c编译为公共目标文件，最后分别链接server.c和client.c，生成两个可执行程序。公共参数包括-pthread -g -ggdb -DDEBUG -I./inc。当前client目标未显式声明公共目标文件依赖，单独执行make client可能失败。",
+      "需要注意，client目标没有在Makefile中显式声明对公共目标文件的依赖。执行完整的make时，公共目标文件已经在构建server时生成，因此能够完成链接；但清理后单独执行make client可能因为缺少目标文件而失败。",
+      "3.2.4 程序启动入口",
+      "服务端入口为src/server.c::main，主要调用顺序为startSimulation→socket→bind→listen→accept→send/recv；",
+      "客户端入口为src/client.c::main，主要顺序为startSimulation→socket→connect→send/recv。",
+      "startSimulation()创建UDP套接字并启动receive_thread()，网络报文最终经onTCPPocket()进入tju_handle_packet()。",
+      "3.2.5 已有功能与待实现边界",
+      "框架已提供应用入口、八个接口外形、20字节报文编解码、UDP承载、后台接收线程、连接表骨架和基础接收缓冲区。三次握手、四次挥手、序号与累计ACK、失序重组、超时重传、RTT/RTO、rwnd、零窗口处理及基础Reno仍需后续实现。",
+      "3.3 规定接口、调用关系与数据流",
+      "框架向应用提供八个规定接口，网络侧以tju_handle_packet()作为内部报文入口。服务端和客户端通过共同的UDP模拟层通信，主要调用和数据路径见图。",
+      "3.3.1 主要函数调用与数据流",
+      "发送数据经tju_send()、create_packet_buf()和sendToLayer3()进入UDP；接收数据经receive_thread()、onTCPPocket()和tju_handle_packet()写入接收缓冲区。",
+      "3.3.2 八个规定接口之间的关系",
+      "八个接口并不是互相逐层调用，而是由应用程序按照socket生命周期依次调用，并通过socket状态、全局socket表和接收缓冲区间间接协同。",
+      "3.3.3 控制报文处理路径",
+      "报文格式已经定义SYN、ACK和FIN标志，因此控制报文理论上应使用与数据报文相同的底层收发路径。",
+      "SYN、ACK和FIN应与数据报文共用UDP收发路径，并在tju_handle_packet()中驱动状态机。当前connect/accept未发送握手报文，close未发送FIN，控制报文处理和重传均未实现。",
+      "3.4 关键数据结构、并发与定时机制",
+      "tju_tcp_t保存连接地址、状态、缓冲区、锁和窗口指针；tju_header_t与tju_packet_t描述20字节首部及有效载荷。框架已建立基本结构，但大部分可靠传输和并发机制尚未启用。",
+      "3.4.1 tju_tcp_t套接字结构",
+      "tju_tcp_t 定义于 inc/tju_tcp.h，是整个协议栈的核心控制结构。每次调用 tju_socket() 都会创建并初始化一个该类型的对象。",
+      "tju_tcp_t 将连接信息、缓冲区、同步对象和窗口状态集中在同一个结构中，相当于简化版 TCP 的传输控制块。后续实现可靠传输时，需要继续在该结构中维护发送序号、期望接收序号、累计确认号、窗口大小、未确认报文队列、重传状态和连接关闭状态。",
+      "3.4.2 TJU_TCP报文结构",
+      "TJU_TCP 报文由固定报文头和可变长度数据区组成。相关结构和编解码函数主要位于 inc/tju_packet.h 和 src/tju_packet.c。",
+      "tju_header_t 表示长度为 20 字节的报文头，主要字段如下。",
+      "tju_packet_t 在报文头和数据之外，还包含 sent_time，可用于记录报文发送时间、计算 RTT 或判断重传超时，但当前代码尚未建立完整的使用过程。",
+      "报文首部固定20字节，包含端口、序号、确认号、长度、标志和通告窗口。sent_time可用于RTT和重传计时，但当前未投入使用。",
+      "3.4.3 发送缓冲区和接收缓冲区",
+      "当前接收数据的基本路径为：",
+      "receive_thread",
+      "→ onTCPPocket",
+      "→ tju_handle_packet",
+      "→ received_buf",
+      "→ tju_recv",
+      "→ 应用程序",
+      "tju_handle_packet() 每收到一段数据都会重新扩展缓冲区并复制数据；tju_recv() 在部分读取后还需要移动剩余内容。当数据量较大或报文数量较多时，会产生频繁的内存申请和数据复制，影响性能。后续可以使用固定容量的循环缓冲区，或者维护读写偏移量，避免每次收发都移动整个缓冲区。",
+      "3.4.4 状态机",
+      "global.h定义了从CLOSED到TIME_WAIT的11种状态，但基线代码主要使用CLOSED、LISTEN和ESTABLISHED。connect()和accept()直接进入ESTABLISHED，close()未实现，因此完整连接状态机仍为空缺。",
+      "3.4.5 线程机制",
+      "程序运行后主要包含两类线程：",
+      "startSimulation() 创建底层 UDP 套接字并绑定端口 20218，随后启动后台接收线程。该线程先读取报文头中的总长度，再接收完整报文，之后根据四元组哈希值在监听套接字表和已连接套接字表中查找对应连接。",
+      "这种设计将应用操作和网络报文接收分离，使报文可以异步到达。但后台接收线程可能与应用线程同时访问套接字状态、接收缓冲区、发送窗口和全局套接字表，因此所有共享数据都需要明确的同步策略。",
+      "3.4.6 锁和条件变量",
+      "框架为每个 tju_tcp_t 提供两个互斥锁和一个条件变量。",
+      "当前 tju_recv() 通过反复检查 received_len 等待数据到达。该方式存在两个问题：一是持续轮询会消耗 CPU；二是长度判断与接收线程修改缓冲区之间可能发生数据竞争。",
+      "更合理的处理方式是：",
+      "应用线程：",
+      "加 recv_lock",
+      "↓",
+      "while 接收缓冲区为空：",
+      "pthread_cond_wait(wait_cond, recv_lock)",
+      "↓",
+      "读取数据",
+      "↓",
+      "释放 recv_lock",
+      "接收线程：",
+      "加 recv_lock",
+      "↓",
+      "写入 received_buf",
+      "↓",
+      "pthread_cond_signal 或 pthread_cond_broadcast",
+      "↓",
+      "释放 recv_lock",
+      "同理，连接建立完成、收到确认、发送窗口出现空位和连接关闭完成时，也可以使用条件变量通知等待线程。",
+      "3.4.7 定时器机制",
+      "框架尚未实现独立的定时器线程或定时器队列。tju_packet_t 中的 sent_time 为记录报文发送时刻预留了位置，但当前没有基于该字段执行超时检查和重传。",
+      "可靠传输至少需要下列定时机制：",
+      "3.4.8 可靠性、并发安全和性能风险",
+      "3.5 环境搭建测试",
+      "本项目采用 Windows 宿主机、Oracle VM VirtualBox 和 Vagrant 搭建实验环境。Vagrant 启动两台 Ubuntu 20.04 Server 虚拟机，分别模拟客户端和服务端。项目目录由 Windows 共享至两台虚拟机的 /vagrant/tju_tcp，便于在宿主机编辑代码并在虚拟机中编译、运行和测试。",
+      "3.5.1 安装Oracle VM VirtualBox和Vagrant软件",
+      "安装完成后，在CMD中执行：",
+      "vagrant",
+      "3.5.2 开启虚拟机",
+      "在项目环境目录中执行：",
+      "vagrant up",
+      "3.5.3 使用ssh连入server和client",
+      "在项目环境目录使用vagrant ssh server/client进入虚拟机：",
+      "vagrant ssh server",
+      "vagrant ssh client",
+      "3.5.4 验证环境正常",
+      "在server和client任一虚拟机中切换到 /vagrant/tju_tcp目录：",
+      "cd /vagrant/tju_tcp/",
+      "使用make 编译初始代码：",
+      "make",
+      "在服务端运行服务端代码 ，5s内在客户端运行客户端代码：",
+      "/vagrant/tju_tcp/server",
+      "/vagrant/tju_tcp/client",
+      "3.6 代表性AI协作与验证记录"
+    ],
+    "four": [
+      "四、协议总体设计（第一阶段）",
+      "4.1 设计目标、实现功能与总体架构",
+      "本项目在应用层实现简化的可靠传输协议，并使用 UDP 作为底层报文承载机制。总体设计以 tju_tcp_t 为每条连接的控制中心，在现有八个规定接口和底层收发框架的基础上，增加连接管理、可靠传输、流量控制、基础拥塞控制、缓冲区管理和定时器机制。",
+      "各模块不是相互独立工作的：连接管理模块维护连接状态；可靠传输模块维护序号、确认号和未确认报文；流量控制和拥塞控制共同决定实际发送窗口；定时器负责检测未确认报文是否超时；缓冲区负责保存待发送、未确认、乱序到达和等待应用读取的数据；所有控制报文和数据报文最终都通过底层 UDP 在客户端与服务端之间传输。",
+      "4.1.1 总体架构图",
+      "应用程序只通过规定的 TJU_TCP 接口访问协议栈。tju_tcp_t 保存一条连接的完整运行状态，各协议模块围绕该结构工作。发送端生成的控制报文和数据报文经过报文处理模块序列化后交给 sendToLayer3()，再由 UDP 发送；接收端的后台线程从 UDP 获取报文，通过连接查找和报文分发，将其交给对应套接字的状态机和可靠传输模块处理。",
+      "4.1.2 各模块职责",
+      "4.1.3 可靠传输、流量控制和拥塞控制的关系",
+      "发送端不能只根据发送缓冲区中是否存在数据决定是否发送，还必须同时考虑接收方能力和网络拥塞程度。实际可用发送窗口设计为：effective_window = min(rwnd, cwnd)。",
+      "其中：",
+      "rwnd是接收端通告窗口，由流量控制模块维护；",
+      "cwnd是拥塞窗口，由基础拥塞控制模块维护；",
+      "已发送但尚未确认的数据量不得超过effective_window；",
+      "发送窗口出现空间后，可靠传输模块才能继续从发送缓冲区取出数据。",
+      "三者之间的关系如下：",
+      "可靠传输模块负责为每个数据段分配序号，并将发送后的报文保留在未确认队列中。收到累计 ACK 后，已经确认的数据从队列和发送缓冲区中移除，同时滑动发送窗口。若收到重复报文，接收端不重复交付数据，而是再次返回当前累计确认号。",
+      "流量控制模块根据接收缓冲区剩余空间计算通告窗口。随着应用程序调用 tju_recv() 取走数据，接收缓冲区空闲空间增大，接收端应在 ACK 中通告新的窗口。",
+      "基础拥塞控制模块维护 cwnd 和 ssthresh。连接开始时使用慢启动，拥塞窗口随确认到达较快增长；达到阈值后进入拥塞避免阶段，降低增长速度。发生超时等丢包事件后，减小拥塞窗口并调整慢启动阈值。",
+      "4.1.4 缓冲区设计及数据关系",
+      "系统计划设置四类逻辑缓冲区。",
+      "发送缓冲区不能在报文首次交给 UDP 后立即释放，因为 UDP 不保证报文成功到达。只有收到有效 ACK 后，才能释放对应数据。",
+      "接收端收到报文后，首先检查序号：",
+      "序号等于期望序号时，将数据加入接收缓冲区，并继续检查乱序队列中是否存在后续连续数据；",
+      "序号大于期望序号时，将报文暂存至乱序队列；",
+      "序号小于期望序号时，将其视为重复报文，不重复写入接收缓冲区；",
+      "每次处理后返回当前累计确认号和接收窗口。",
+      "缓冲区的读写由互斥锁保护。缓冲区从空变为非空时，接收线程通过条件变量唤醒阻塞在 tju_recv() 中的应用线程；发送窗口从满变为可用时，通过条件变量唤醒等待发送的线程。",
+      "4.1.5 与底层UDP的关系",
+      "UDP仅作为 TJU_TCP 报文的底层承载通道，不提供连接状态、可靠性、按序交付、流量控制或拥塞控制。上述功能均由 TJU_TCP 协议层实现。",
+      "发送方向的数据路径为：",
+      "应用数据",
+      "→ tju_send()",
+      "→ 发送缓冲区",
+      "→ 发送窗口检查",
+      "→ TJU_TCP分段与报文构造",
+      "→ 未确认报文队列",
+      "→ sendToLayer3()",
+      "→ UDP sendto()",
+      "→ 模拟网络",
+      "接收方向的数据路径为：",
+      "模拟网络",
+      "→ UDP recvfrom()",
+      "→ receive_thread()",
+      "→ onTCPPocket()",
+      "→ 连接查找",
+      "→ tju_handle_packet()",
+      "→ 状态机/ACK处理/序号检查",
+      "→ 乱序队列或接收缓冲区",
+      "→ tju_recv()",
+      "→ 应用程序",
+      "控制报文与数据报文共用同一 UDP 通道，但进入 tju_handle_packet() 后采用不同处理路径：",
+      "SYN、FIN等控制报文进入连接状态机；",
+      "ACK报文进入发送窗口、拥塞控制和定时器处理；",
+      "带有效载荷的数据报文进入可靠接收、乱序重组和接收缓冲区；",
+      "一个报文可以同时包含 ACK 和数据，因此报文处理不能简单地只选择其中一条路径。",
+      "4.2 报文格式和关键数据结构",
+      "TJU_TCP 使用课程框架规定的固定20字节自定义报文头。该报文头借鉴 TCP 的端口、序号、确认号、控制标志和通告窗口等字段，但并不等同于标准 TCP 首部。框架没有定义首部选项、紧急指针，也没有提供独立的 TJU_TCP 校验和字段。",
+      "4.2.1 TJU_TCP报文总体格式",
+      "一个 TJU_TCP 报文由固定20字节首部和可变长度有效载荷组成：",
+      "报文总长度满足：",
+      "plen = hlen + payload_length",
+      "heln = 20",
+      "plen ≤ MAX_LEN",
+      "框架中定义：",
+      "DEFAULT_HEADER_LEN = 20字节",
+      "MAX_LEN            = 1400字节",
+      "MAX_DLEN           = 1375字节",
+      "虽然1400字节总长度减去20字节首部后理论上还剩1380字节，但框架将单个报文的最大数据长度规定为1375字节。实现时应遵循 MAX_DLEN，不能仅根据算术结果放入1380字节数据。应用层传入的较长数据必须被划分成多个报文发送，以避免底层 IP 分片并符合框架限制。",
+      "4.2.2 报文头字段说明",
+      "4.2.3 控制标志设计",
+      "框架定义了三个主要控制标志：",
+      "控制标志可以组合使用。处理标志时应使用按位与运算，不能只用相等判断。",
+      "4.2.4 校验和及其覆盖范围",
+      "当前课程框架定义的20字节 TJU_TCP 报文头中没有独立的校验和字段，ext字段在源码中明确用于将首部补齐为20字节，没有实际协议含义。现有 create_packet()、packet_to_buf()、header_in_char() 和 tju_handle_packet() 也没有计算或验证 TJU_TCP 层校验和。",
+      "因此，本项目基线版本的校验范围为：",
+      "一个完整的 TJU_TCP 报文，包括其20字节首部和有效载荷，作为 UDP 数据载荷交给系统协议栈。因此，正常情况下 UDP 校验机制能够覆盖整个 TJU_TCP 字节串。但是，UDP 校验属于底层传输保护，不能代替 TJU_TCP 的序号检查、重复检测、累计确认和重传机制。",
+      "4.2.5 序号空间设计",
+      "seq_num和ack_num均为32位无符号整数，因此序号空间为：",
+      "序号到达最大值后按照模回绕：",
+      "TJU_TCP按字节编号，而不是按报文编号。接收端成功收到连续数据后返回下一个期望接收的字节序号。",
+      "连接双方分别维护独立的发送序号空间。完成握手后维护：",
+      "发送数据后：snd_nxt = snd_nxt + 实际发送的数据字节数",
+      "收到有效累计ACK后：snd_una = ack_num",
+      "接收到连续数据后：rcv_nxt = rcv_nxt + 新接收的数据字节数",
+      "在设计语义上，SYN和FIN分别占用一个序号，以便对连接建立和关闭进行确认：",
+      "发送SYN后：snd_nxt = ISN + 1",
+      "发送FIN后：snd_nxt = 原snd_nxt + 1",
+      "纯ACK报文不携带新数据，也不消耗序号。",
+      "由于序号会回绕，比较序号时不应直接在所有情况下使用普通的无符号整数大小比较。可采用带符号差值判断：",
+      "#define SEQ_LT(a, b)  ((int32_t)((a) - (b)) < 0)",
+      "#define SEQ_LEQ(a, b) ((int32_t)((a) - (b)) <= 0)",
+      "#define SEQ_GT(a, b)  ((int32_t)((a) - (b)) > 0)",
+      "#define SEQ_GEQ(a, b) ((int32_t)((a) - (b)) >= 0)",
+      "该方法要求任意一次比较涉及的有效窗口小于序号空间的一半。本项目的窗口远小于，因此满足该条件。",
+      "4.2.6 tju_header_t和tju_packet_t",
+      "1. tju_header_t",
+      "tju_header_t用于表示结构化报文头：",
+      "typedef struct {",
+      "uint16_t source_port;",
+      "uint16_t destination_port;",
+      "uint32_t seq_num;",
+      "uint32_t ack_num;",
+      "uint16_t hlen;",
+      "uint16_t plen;",
+      "uint8_t  flags;",
+      "uint16_t advertised_window;",
+      "uint8_t  ext;",
+      "} tju_header_t;",
+      "该结构主要供程序内部读取和填写字段。真正发送前，必须通过 header_in_char() 和 packet_to_buf() 将各字段按照规定偏移写入连续的20字节网络报文，不能直接将 C 结构体整体发送。原因是编译器可能在结构成员之间插入对齐填充，而且本机字节序也可能与网络字节序不同。",
+      "2. tju_packet_t",
+      "typedef struct {",
+      "tju_header_t header;",
+      "struct timeval sent_time;",
+      "char* data;",
+      "} tju_packet_t;",
+      "tju_packet_t是内存中的报文描述对象，不是直接在线路上传输的格式。sent_time和data指针本身不会写入20字节首部。发送时只序列化 header 中规定的字段及 data 指向的有效载荷。",
+      "4.2.7 tju_sock_addr和tju_tcp_t",
+      "1. tju_sock_addr",
+      "typedef struct {",
+      "uint32_t ip;",
+      "uint16_t port;",
+      "} tju_sock_addr;",
+      "该结构表示一个 TJU_TCP 端点地址。连接由以下四元组唯一确定：本地IP、本地端口、远端IP、远端端口。",
+      "连接查找时不能只依赖哈希下标，还应比较完整四元组，防止不同连接发生哈希冲突后被误认为同一个套接字。",
+      "2. tju_tcp_t",
+      "tju_tcp_t相当于一条连接的传输控制块，是协议实现的核心数据结构。",
+      "4.2.8 发送窗口与接收窗口",
+      "框架使用 window_t关联发送窗口和接收窗口：",
+      "typedef struct {",
+      "sender_window_t*   wnd_send;",
+      "receiver_window_t* wnd_recv;",
+      "} window_t;",
+      "发送窗口sender_window_t",
+      "发送窗口应维护：",
+      "发送端允许继续发送的上界为：",
+      "只有当新报文结束序号不超过该上界时，才能发送。",
+      "接收窗口receiver_window_t",
+      "接收窗口应维护：",
+      "通告窗口可按以下方式计算：",
+      "收到乱序数据时，不能立即将其交付应用程序。只有缺失区间补齐并形成从 rcv_nxt 开始的连续字节流后，才能把数据移动到应用接收缓冲区并推进累计确认号。",
+      "4.2.9 未确认报文和乱序报文节点",
+      "为了完成重传和乱序重组，需要在现有框架基础上增加逻辑队列。可设计以下节点：",
+      "typedef struct unacked_packet {",
+      "uint32_t seq_start;",
+      "uint32_t seq_end;",
+      "char* packet_buf;",
+      "uint16_t packet_len;",
+      "struct timeval sent_time;",
+      "int retransmitted;",
+      "int retransmit_count;",
+      "struct unacked_packet* next;",
+      "} unacked_packet_t;",
+      "该结构用于保存已发送但尚未确认的报文：",
+      "seq_start和seq_end表示报文覆盖的序号区间；",
+      "packet_buf保存完整报文副本，供超时重传使用；",
+      "sent_time用于检测RTO；",
+      "retransmitted用于避免对重传报文进行错误的RTT采样；",
+      "节点在累计ACK覆盖其序号范围后释放。",
+      "乱序报文可以设计为：",
+      "typedef struct received_packet {",
+      "uint32_t seq_start;",
+      "uint32_t seq_end;",
+      "char* data;",
+      "uint16_t data_len;",
+      "struct received_packet* next;",
+      "} received_packet_t;",
+      "该结构按 seq_start 排序保存乱序数据。插入时应处理完全重复、部分重叠和相邻区间，避免相同字节多次占用接收缓存。",
+      "4.3 状态机、缓冲区与窗口协同",
+      "TJU_TCP 的数据传输以连接状态为前提，以发送、接收缓冲区保存应用数据，以滑动窗口管理序号范围，并由接收窗口 rwnd、拥塞窗口 cwnd 和在途数据量 FlightSize 共同限制发送速率。",
+      "其中：",
+      "连接状态决定当前允许执行的协议操作；",
+      "发送缓冲区保存应用提交但尚未完成可靠传输的数据；",
+      "接收缓冲区保存已经按序到达、等待应用读取的数据；",
+      "rwnd反映接收端剩余缓存能力；",
+      "cwnd反映发送端根据网络拥塞状况允许发送的数据量；",
+      "FlightSize表示已发送但尚未被确认的有效数据量；",
+      "滑动窗口根据累计 ACK 向前移动，从而释放已确认数据并允许发送新数据。",
+      "4.3.1 总体协同关系",
+      "发送端实际允许存在于网络中的未确认数据不能超过接收方和网络分别允许的上限：",
+      "当前还能发送的数据量为：",
+      "同时还要受到发送缓冲区中待发送数据量的限制，因此一次实际可以发送的数据量为：",
+      "其中：",
+      "UnsentBytes为发送缓冲区中尚未分配序号并发送的数据量；",
+      "MSS取课程框架规定的最大报文数据长度 MAX_DLEN；",
+      "FlightSize只统计已发送但尚未累计确认的数据，不包括尚未发送的数据。",
+      "总体协同关系如下：",
+      "4.3.2 连接状态对缓冲区和窗口操作的约束",
+      "连接状态决定是否允许应用发送、接收数据，以及收到报文后应进入哪条处理路径。",
+      "tju_send()正常发送应用数据的基本前提是套接字处于 ESTABLISHED 状态。连接进入关闭流程后，不再接受新的应用发送请求，但此前已经进入发送缓冲区的数据应根据关闭策略处理完毕后再发送 FIN。",
+      "tju_recv()在连接已建立但接收缓冲区为空时，应通过条件变量阻塞；如果对端已经关闭发送方向且接收缓冲区也为空，则应返回结束标志，而不是永久等待。",
+      "4.3.3 连接状态机",
+      "状态机与缓冲区的协同体现在：",
+      "完成三次握手后才初始化正常的数据发送窗口，并唤醒等待在 tju_connect() 或 tju_accept() 中的线程。",
+      "收到 FIN 后，先处理该报文之前的有效数据，再更新接收方向的关闭状态。",
+      "主动关闭时，应等待发送缓冲区中的数据获得确认后再发送 FIN，避免未发送数据被直接丢弃。",
+      "进入 CLOSED 前，应停止定时器并释放发送缓冲区、接收缓冲区、未确认队列和乱序队列。",
+      "4.3.4 发送缓冲区与发送滑动窗口",
+      "发送缓冲区可以从逻辑上划分为三个区域：",
+      "snd_una：最早尚未确认的序号；",
+      "snd_nxt：下一个可以用于新数据的序号；",
+      "[snd_una, snd_nxt)：已发送但尚未累计确认的序号范围；",
+      "收到覆盖某一区间的累计 ACK 后，发送窗口左边界向前滑动；",
+      "已确认数据及对应未确认报文节点可以释放；",
+      "窗口滑动后产生新的发送空间，发送线程可以继续发送。",
+      "在不存在部分确认和序号回绕歧义时，可近似表示为：",
+      "实际实现中，FlightSize应统计未被累计确认的唯一数据字节数。重传同一段数据不会增加 FlightSize，纯 ACK 报文也不计入 FlightSize。",
+      "4.3.5 接收缓冲区与接收滑动窗口",
+      "接收端维护 rcv_nxt，表示下一个期望收到的字节序号。接收窗口可表示为：",
+      "接收端对数据报文进行以下分类：",
+      "接收窗口 rwnd应根据所有占用接收能力的数据计算，包括已经按序等待应用读取的数据和已经缓存的乱序数据：",
+      "如果只扣除按序数据而忽略乱序数据，乱序报文可能不断占用内存，导致实际缓存超过设置上限。",
+      "应用调用 tju_recv()取走数据后，接收缓冲区空间增大，接收窗口右边界随之向右移动。接收端应在后续 ACK 中通告新的 rwnd；必要时可主动发送窗口更新报文。",
+      "4.3.6 rwnd、cwnd与FlightSize",
+      "三个变量分别描述不同限制：",
+      "发送条件为：",
+      "若条件不满足，数据继续保留在发送缓冲区，发送线程等待 ACK、窗口更新或拥塞窗口增长。",
+      "4.3.7 基础拥塞控制协同",
+      "以 MSS = MAX_DLEN 为单位，可采用基础 Reno 控制过程。",
+      "慢启动",
+      "当：",
+      "每收到确认新数据的 ACK，增大拥塞窗口：",
+      "慢启动阶段中，一个 RTT 内通常可使 cwnd近似翻倍。",
+      "拥塞避免",
+      "当：",
+      "每收到确认新数据的 ACK，可近似更新：",
+      "使 cwnd在一个 RTT 内大约增加一个 MSS。",
+      "超时处理",
+      "发生重传超时时：",
+      "随后重新进入慢启动，并重传最早未确认报文。",
+      "三个重复ACK",
+      "如果课程阶段要求实现快速重传和快速恢复，则在连续收到三个重复 ACK 时：",
+      "立即重传缺失报文，并进入快速恢复。若本阶段只要求基础拥塞控制，也可以将超时作为主要丢包判断，但应在报告中明确实际实现边界。",
+      "重复 ACK 不确认新数据，因此不能减小 FlightSize；只有 ACK 前移并确认新字节时，才能滑动发送窗口。",
+      "4.3.8 数据传输时序",
+      "4.3.9 核心处理伪代码",
+      "发送数据：",
+      "检查连接是否为ESTABLISHED",
+      "将应用数据加入发送缓冲区",
+      "allowance = min(rwnd, cwnd) - FlightSize",
+      "如果allowance <= 0：",
+      "等待ACK或窗口更新",
+      "否则：",
+      "按min(allowance, MSS, 待发送量)进行分段",
+      "发送报文并加入未确认队列",
+      "snd_nxt前移",
+      "FlightSize增加",
+      "收到ACK：",
+      "更新对端通告的rwnd",
+      "如果ACK确认了新数据：",
+      "snd_una前移",
+      "删除已确认报文",
+      "FlightSize减少",
+      "更新cwnd和重传定时器",
+      "唤醒等待发送的线程",
+      "如果是重复ACK：",
+      "增加重复ACK计数",
+      "达到规定次数后执行快速重传",
+      "收到数据：",
+      "检查连接状态、序号和接收窗口",
+      "如果数据按序：",
+      "写入接收缓冲区",
+      "推进rcv_nxt",
+      "合并乱序队列中的连续数据",
+      "唤醒tju_recv()",
+      "如果数据乱序：",
+      "插入乱序队列",
+      "重新计算rwnd",
+      "返回累计ACK和最新rwnd",
+      "4.4 并发控制、定时器与异常处理",
+      "TJU_TCP 同时存在应用线程、后台接收线程和定时任务，它们会并发访问连接状态、缓冲区、窗口和未确认报文队列。因此，需要通过互斥锁和条件变量保证共享数据一致，并对丢包、重复、失序、校验错误和零窗口等情况设置明确的处理路径。",
+      "4.4.1 线程及其职责",
+      "整体关系如下：",
+      "4.4.2 锁和条件变量",
+      "可沿用框架中的 send_lock、recv_lock和 wait_cond，并根据实现需要增加状态或定时器条件变量。",
+      "tju_recv()不应持续轮询 received_len，而应在持有接收锁的情况下等待：",
+      "加recv_lock",
+      "while 接收缓冲区为空且连接未关闭：",
+      "pthread_cond_wait(recv_cond, recv_lock)",
+      "读取数据或返回连接关闭",
+      "释放recv_lock",
+      "条件变量必须与 while共同使用，因为线程被唤醒后，条件可能已经被其他线程改变。",
+      "为避免死锁，应规定统一的加锁顺序。尽量避免同时持有多个锁。调用 sendToLayer3()、等待条件变量或执行耗时内存操作前，应评估是否可以先释放不必要的锁。",
+      "重传计时",
+      "发送 SYN、数据报文或 FIN 后，将需要确认的报文加入未确认队列，并记录：报文序号范围、完整报文副本、首次或最近发送时间、重传次数、当前 RTO、是否发生过重传。",
+      "定时器优先检查最早未确认报文：",
+      "发送需确认的报文",
+      "↓",
+      "加入未确认队列并记录发送时间",
+      "↓",
+      "等待ACK或RTO到期",
+      "├─ 收到有效ACK：删除已确认报文，重设定时器",
+      "└─ RTO到期：重传最早未确认报文，执行RTO退避",
+      "超时处理伪代码如下：",
+      "加send_lock",
+      "找到最早未确认报文",
+      "如果当前时间 >= 报文截止时间：",
+      "ssthresh = max(FlightSize / 2, 2 * MSS)",
+      "cwnd = MSS",
+      "重传该报文",
+      "更新发送时间",
+      "RTO加倍",
+      "重传次数加1",
+      "如果超过最大重传次数：",
+      "将连接标记为失败",
+      "唤醒所有等待线程",
+      "释放send_lock",
+      "重传使用原序号，不推进 snd_nxt，也不增加 FlightSize。采用 Karn 原则时，已经重传过的报文不用于 RTT 采样，以免无法判断 ACK 对应第一次发送还是重传。",
+      "资源释放",
+      "资源释放应统一由连接清理函数完成，不能由应用线程、接收线程和定时器线程分别直接释放同一对象。",
+      "清理内容包括：",
+      "从监听表或已连接表中移除套接字；",
+      "停止该连接的重传和 TIME_WAIT定时任务；",
+      "释放发送缓冲区和接收缓冲区；",
+      "释放未确认报文及其报文副本；",
+      "释放乱序报文队列；",
+      "释放发送、接收窗口结构；",
+      "销毁互斥锁和条件变量；",
+      "最后释放 tju_tcp_t。",
+      "不能直接复制或释放仍含有活动锁、条件变量和共享指针的 tju_tcp_t。特别是 tju_accept()应新建并逐项初始化连接套接字，不能通过 memcpy()复制整个监听套接字。",
+      "异常报文处理",
+      "丢包、重复和失序路径",
+      "接收端只将从 rcv_nxt开始连续的数据交付给应用。乱序数据先保存在乱序队列中，缺失报文到达后再进行合并。重复报文不会重复占用接收缓冲区，但应触发 ACK，使发送端能够恢复丢失的确认信息。",
+      "校验错误路径",
+      "课程自定义20字节首部没有独立的 TJU_TCP 校验和字段，因此当前主要依赖底层 UDP 校验。UDP校验失败的报文通常由操作系统协议栈直接丢弃，不会交付给 receive_thread()。",
+      "协议层仍应执行以下合法性检查：",
+      "实际接收长度至少为20字节",
+      "hlen必须等于20",
+      "plen必须满足20 ≤ plen ≤ MAX_LEN",
+      "plen必须与实际UDP载荷长度一致",
+      "有效载荷长度不得超过MAX_DLEN",
+      "端口、状态、序号和窗口必须合法",
+      "零窗口处理",
+      "当接收缓存被占满时，接收端在 ACK 中通告：advertised_window = 0。",
+      "发送端收到零窗口后：",
+      "停止发送新的数据；",
+      "保留发送缓冲区中的待发送数据；",
+      "不把零窗口当作拥塞事件，不因此减小 cwnd；",
+      "启动持续定时器；",
+      "定时发送小型窗口探测报文；",
+      "收到非零窗口通告后停止探测，重新计算发送许可。",
+      "零窗口探测用于避免窗口更新 ACK 丢失后双方永久等待。探测报文不应被当成新的大段应用数据，也不应使 FlightSize重复增加。",
+      "4.4.9 资源与并发安全原则",
+      "实现中应保持以下原则：",
+      "共享状态必须在对应锁保护下访问；",
+      "条件判断和pthread_cond_wait必须使用同一把锁；",
+      "重传与ACK处理不能同时释放同一报文；",
+      "重传不增加FlightSize；",
+      "无效报文不能改变状态、序号和窗口；",
+      "释放套接字前必须停止定时任务并移出连接表；",
+      "所有等待线程在连接关闭或失败时必须被唤醒；",
+      "缓冲区和队列中的每块内存只能释放一次。",
+      "4.5 分阶段实现计划与测试策略",
+      "4.6 代表性AI协作与验证记录"
+    ],
+    "ten": [
+      "十、总结",
+      "【填写提示】总结完成的必做任务、主要工程收获、测试结论、基础Reno实现边界、AI协作经验、当前局限和后续改进。不要把计划或未验证内容写成已完成成果。",
+      "参考文献",
+      "[1] RFC 9293, Transmission Control Protocol (TCP), https://www.rfc-editor.org/rfc/rfc9293.html.",
+      "[2] RFC 6298, Computing TCP's Retransmission Timer, https://www.rfc-editor.org/rfc/rfc6298.html.",
+      "[3] RFC 5681, TCP Congestion Control, https://www.rfc-editor.org/rfc/rfc5681.html.",
+      "[4] 《计算机网络实践说明书（2026-AI改革版-v2）》.",
+      "[5] 《计算机网络实践指导书（2026-AI改革版）》.",
+      "[6] RFC 5681，TCP Congestion Control，https://www.rfc-editor.org/rfc/rfc5681.html.",
+      "附录A AI错误、遗漏或不适用建议的修正案例",
+      "【填写提示】至少选择一项对结果有实际影响的案例，说明AI为何出错或不适用、如何发现、采用了什么证据以及最终修正。",
+      "\\",
+      "附录B 三阶段进度摘要与诚信声明",
+      "本人声明：本报告、代码、Git记录、测试结果、日志、trace、实验数据和AI使用记录真实可复现；本人独立完成规定任务，已如实说明AI参与，并能够解释和修改全部提交内容；未向公共AI服务上传课程受限材料、隐藏测试、账号、密钥或他人资料。",
+      "学生签名：____________________        日期：______年____月____日"
+    ]
+  },
+  "functions": {
+    "main": [
+      {
+        "file": "src/client.c",
+        "line": 5
+      },
+      {
+        "file": "src/server.c",
+        "line": 4
+      }
+    ],
+    "onTCPPocket": [
+      {
+        "file": "src/kernel.c",
+        "line": 5
+      }
+    ],
+    "sendToLayer3": [
+      {
+        "file": "src/kernel.c",
+        "line": 53
+      }
+    ],
+    "startSimulation": [
+      {
+        "file": "src/kernel.c",
+        "line": 124
+      }
+    ],
+    "cal_hash": [
+      {
+        "file": "src/kernel.c",
+        "line": 169
+      }
+    ],
+    "create_packet_buf": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 40
+      }
+    ],
+    "free_packet": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 59
+      }
+    ],
+    "get_src": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 72
+      }
+    ],
+    "get_dst": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 78
+      }
+    ],
+    "get_seq": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 84
+      }
+    ],
+    "get_ack": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 90
+      }
+    ],
+    "get_hlen": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 96
+      }
+    ],
+    "get_plen": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 102
+      }
+    ],
+    "get_flags": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 108
+      }
+    ],
+    "get_advertised_window": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 114
+      }
+    ],
+    "get_ext": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 120
+      }
+    ],
+    "header_in_char": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 136
+      }
+    ],
+    "packet_to_buf": [
+      {
+        "file": "src/tju_packet.c",
+        "line": 188
+      }
+    ],
+    "build_packet": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 154
+      },
+      {
+        "file": "src/tju_tcp.c",
+        "line": 479
+      }
+    ],
+    "trace_initialize_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 171
+      }
+    ],
+    "trace_event": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 213
+      }
+    ],
+    "trace_packet": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 233
+      }
+    ],
+    "trace_start_process": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 245
+      }
+    ],
+    "trace_flush_pending": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 253
+      }
+    ],
+    "send_packet_traced": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 264
+      }
+    ],
+    "generate_isn": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 307
+      }
+    ],
+    "send_control": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 331
+      }
+    ],
+    "add_milliseconds": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 344
+      }
+    ],
+    "finish_connection": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 357
+      }
+    ],
+    "enter_time_wait": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 370
+      }
+    ],
+    "deadline_reached": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 376
+      }
+    ],
+    "seq_before": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 384
+      }
+    ],
+    "seq_after": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 385
+      }
+    ],
+    "seq_before_or_equal": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 386
+      }
+    ],
+    "elapsed_ms": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 388
+      }
+    ],
+    "receive_window_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 402
+      }
+    ],
+    "sender_effective_window_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 435
+      }
+    ],
+    "trace_sender_window_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 445
+      }
+    ],
+    "update_peer_window_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 459
+      }
+    ],
+    "update_rto": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 494
+      }
+    ],
+    "wait_connection_event": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 517
+      }
+    ],
+    "pop_established_connection": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 524
+      }
+    ],
+    "flight_size": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 621
+      }
+    ],
+    "trace_congestion": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 630
+      }
+    ],
+    "reno_loss": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 649
+      }
+    ],
+    "reno_new_ack": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 667
+      }
+    ],
+    "transmit_segment": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 692
+      }
+    ],
+    "transmit_window_probe": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 714
+      }
+    ],
+    "append_received": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 816
+      }
+    ],
+    "receive_data_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 845
+      }
+    ],
+    "process_ack_locked": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 918
+      }
+    ],
+    "tju_socket": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1032
+      }
+    ],
+    "tju_bind": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1066
+      }
+    ],
+    "tju_listen": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1079
+      }
+    ],
+    "tju_accept": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1092
+      }
+    ],
+    "tju_connect": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1115
+      }
+    ],
+    "tju_send": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1190
+      }
+    ],
+    "tju_recv": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1267
+      }
+    ],
+    "tju_handle_packet": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1316
+      }
+    ],
+    "tju_close": [
+      {
+        "file": "src/tju_tcp.c",
+        "line": 1541
+      }
+    ]
+  },
+  "location_claims": [
+    {
+      "paragraph": 131,
+      "text": "应用程序只通过规定的 TJU_TCP 接口访问协议栈。tju_tcp_t 保存一条连接的完整运行状态，各协议模块围绕该结构工作。发送端生成的控制报文和数据报文经过报文处理模块序列化后交给 sendToLayer3()，再由 UDP 发送；接收端的后台线程从 UDP 获取报文，通过连接查找和报文分发，将其交给对应套接字的状态机和可靠传输模块处理。"
+    },
+    {
+      "paragraph": 368,
+      "text": "按min(allowance, MSS, 待发送量)进行分段"
+    },
+    {
+      "paragraph": 407,
+      "text": "为避免死锁，应规定统一的加锁顺序。尽量避免同时持有多个锁。调用 sendToLayer3()、等待条件变量或执行耗时内存操作前，应评估是否可以先释放不必要的锁。"
+    },
+    {
+      "paragraph": 484,
+      "text": "客户端仅接受同时设置 SYN 和 ACK 且 ack 等于本端 snd_nxt 的报文。校验通过后记录服务端初始序列号，将 rcv_nxt 设为 y+1，发送第三次握手 ACK（seq=x+1，ack=y+1），然后进入 ESTABLISHED 并唤醒阻塞在 tju_connect() 中的线程。服务端仅在最终 ACK 的确认号等于自身 snd_nxt 时进入 ESTABLISHED，将子连接放入完成队列并唤醒 tju_accept()。因此 connect() 和 accept() 都只会在三次握手真正完成后返回。"
+    },
+    {
+      "paragraph": 492,
+      "text": "双方分别维护独立的发送序号空间。generate_isn() 将单调时钟、受互斥锁保护的递增计数器以及本地和远端地址、端口混合为 32 位 ISN，避免所有连接使用固定初始序号。客户端和服务端的 ISN 分别记为 x 和 y；第一次握手的确认号为 0，第二次握手确认 x+1，第三次握手确认 y+1。纯 ACK 不消耗序号，SYN 消耗一个序号。"
+    },
+    {
+      "paragraph": 499,
+      "text": "连接建立的主要实现位于 src/tju_tcp.c：generate_isn()（约第272行）生成 ISN；send_control()（约第296行）构造并发送控制报文；synack_retransmission_worker()（约第500行）维护服务端第二次握手重传；tju_listen()（约第938行）登记监听套接字；tju_accept()（约第951行）等待完成队列；tju_connect()（约第974行）实现主动打开、SYN重传和阻塞等待；tju_handle_packet()（约第1175行）完成 SYN、SYN|ACK、ACK 校验及状态转换。控制标志定义位于 inc/tju_packet.h。"
+    },
+    {
+      "paragraph": 519,
+      "text": "enter_time_wait() 使用 CLOCK_MONOTONIC 记录截止时间，并等待 2×TJU_MSL；当前 TJU_MSL 定义为 120 s，因此默认 TIME-WAIT 为 240 s。TIME_WAIT 中若收到序列位置等于既有 FIN 的重复 FIN，说明最终 ACK 可能丢失，接收端会重新发送 ACK，并重新开始完整的 2MSL 等待，从而保证旧连接报文在四元组重新使用前从网络中消失。"
+    },
+    {
+      "paragraph": 522,
+      "text": "连接关闭的主要实现位于 src/tju_tcp.c：finish_connection()（约第322行）完成连接注销和线程停止；enter_time_wait()（约第335行）设置 2MSL 截止时间；close_retransmission_worker()（约第541行）维护 FIN 重传、关闭总超时和 TIME-WAIT；process_ack_locked()（约第806行）确认并释放 FIN 前发送数据；tju_recv()（约第1126行）保证缓存数据先于 EOF 交付；tju_handle_packet()（约第1175行，其中 FIN/ACK 状态推进约第1354行）处理 FIN 失序、重复 FIN、同时关闭及状态转换；tju_close()（约第1391行）封闭发送入口、等待数据确认并发出 FIN。状态常量定义在 inc/global.h 第36—46行，FIN 标志定义在 inc/tju_packet.h。"
+    },
+    {
+      "paragraph": 527,
+      "text": "连接建立测试的真实入口是test/test的establish模式，执行方式为进入test目录后运行 ./test establish。test/Makefile将test_client.c和test_server.c分别编译为test_client和test_server。test_server.c调用startSimulation()，在172.17.0.3:1234执行tju_bind()、tju_listen()和tju_accept()；test_client.c连接172.17.0.3:1234，并在tju_connect()返回后等待5 s。网络条件设置、进程启动、日志重定向、评分和超时判断封装在二进制test/test中，项目没有对应可读源码。"
+    },
+    {
+      "paragraph": 534,
+      "text": "连接关闭测试的真实入口是test/test的close模式，执行方式为进入test目录后运行 ./test close。test/Makefile只把test_close_client.c编译为close_client，没有close_server目标或对应服务端源码。test_close_client.c先启动仿真、连接172.17.0.3:1234，等待1 s后打印“调用 tju_close”并执行tju_close()，再等待10 s以便测评程序观察关闭过程；服务端行为、网络条件和评分逻辑封装在test/test中。"
+    },
+    {
+      "paragraph": 537,
+      "text": "对当前实现进行状态路径和边界核验：tju_close()先封闭新的发送请求并等待send_head排空，再固定fin_seq发送FIN；tju_handle_packet()能够区分FIN_WAIT_1、FIN_WAIT_2、CLOSING、CLOSE_WAIT、LAST_ACK和TIME_WAIT；失序FIN只登记pending_fin_seq，前序数据补齐后才消费FIN，因此不会丢失FIN前数据。"
+    },
+    {
+      "paragraph": 561,
+      "text": "主要实现位于src/tju_tcp.c：32位序号比较约第349—351行，flight_size()约第582行，tju_send()约第1049行，tju_recv()约第1126行，receive_data_locked()约第733行，process_ack_locked()约第806行；报文SEQ、ACK和长度字段定义在inc/tju_packet.h。"
+    },
+    {
+      "paragraph": 572,
+      "text": "报文边界检查位于src/tju_tcp.c的tju_handle_packet()约第1175行；报文构造位于build_packet()约第440行；发送副本和重传位于transmit_segment()约第589行、reliable_sender_worker()约第623行；重复ACK和快速重传位于process_ack_locked()约第806行。首部格式和ext字段位于inc/tju_packet.h及src/tju_packet.c。"
+    },
+    {
+      "paragraph": 581,
+      "text": "常量定义在src/tju_tcp.c约第23—25行；elapsed_ms()约第353行负责时间差换算；update_rto()约第455行实现平滑公式和上下界；reliable_sender_worker()约第623行维护超时和指数退避；process_ack_locked()约第806行完成采样选择与Karn过滤。RTTS trace同时记录四个毫秒变量。"
+    },
+    {
+      "paragraph": 594,
+      "text": "流量控制主要位于src/tju_tcp.c：receive_window_locked()约第367行计算实际空闲缓存并保持通告右边界；sender_effective_window_locked()约第401行计算发送约束；update_peer_window_locked()约第425行更新对端绝对窗口；transmit_window_probe()约第607行构造探测；reliable_sender_worker()约第623行处理停发、探测退避及发送端SWS避免；tju_recv()约第1126行释放缓存并发送窗口更新ACK。"
+    },
+    {
+      "paragraph": 598,
+      "text": "可靠传输测试使用test/test_rdt_client.c和test/test_rdt_server.c，由test/Makefile编译为rdt_client与rdt_server，并通过test/test的rdt模式运行。客户端连接172.17.0.3:1234，等待8 s后读取9990字节的rdt_send_file.txt；循环5000次构造固定10000字节数据块并调用tju_send()，总发送量为50,000,000字节。服务端等待8 s后反复以10000字节缓冲调用tju_recv()，累计到50,000,000字节后写入rdt_recv_file.txt。网络条件、进程控制和评分逻辑封装在二进制test/test中。"
+    },
+    {
+      "paragraph": 624,
+      "text": "拥塞控制状态保存在src/tju_tcp.c的连接私有控制块handshake_ctx_t中，与socket一一对应，由handshake_lock保护。单位均为字节，状态在get_handshake()中初始化；没有改变规定接口或SMSS。表7-1给出各变量含义及当前实现位置。"
+    },
+    {
+      "paragraph": 648,
+      "text": "本实现没有完整快速恢复中的ssthresh+3×SMSS临时膨胀，也不随额外重复ACK继续膨胀窗口；采用课程基础任务允许的保守处理。FAST_RECOVERY状态常量只是此处的事件状态标识。主要函数位于src/tju_tcp.c：get_handshake约第275行、sender_effective_window_locked约第427行、flight_size约第613行、trace_congestion约第622行、reno_loss约第640行、reno_new_ack约第657行、reliable_sender_worker约第718行、process_ack_locked约第904行。"
+    },
+    {
+      "paragraph": 650,
+      "text": "表7-2逐行对应五个独立实验进程，不复用或改名同一份Trace。全部实现函数均位于src/tju_tcp.c。为避免长路径挤占表格，C表示对应实验子目录的test/client.event.trace，S表示test/server.event.trace；完整映射见表7-3。"
+    },
+    {
+      "paragraph": 670,
+      "text": "实际结果与分析：实测cwnd由4125增长到22000后进入CA，最终26125；74次CC快照一致，其中61次状态为CA，无RTO或重传，也无cwnd超过对端窗口的快照。客户端Trace第176行到达22000；第311行累计确认22000字节后增加到23375，余量清零，后续增长到24750和26125。"
+    },
+    {
+      "paragraph": 675,
+      "text": "实际结果与分析：实测出现1次RTO和1次重传，数据最终一致。距首个数据SEND约1.051427秒，Trace第25行记录FlightSize=4125、ssthresh=2750、cwnd=1375。第33行新ACK累计确认4125字节，但cwnd只增加1375到2750，然后进入CA。降窗时FlightSize暂时大于cwnd是已发数据尚未确认，并非新增发送越窗。"
+    },
+    {
+      "paragraph": 680,
+      "text": "实际结果与分析：实测1次快速重传、0次RTO。约0.134916秒时，Trace第156行记录FlightSize=19250，ssthresh和cwnd均为9625；随后新ACK保持该窗口并进入CA。该组共13条DUPACK事件，只有首次满足条件时降窗，未因后续重复ACK再次减半；208次CC快照一致，300000字节全部交付。"
+    }
+  ],
+  "table_count": 46,
+  "paragraph_count": 771
+}

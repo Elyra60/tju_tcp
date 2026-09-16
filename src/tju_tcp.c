@@ -20,6 +20,15 @@
  * 实际新数据发送始终还要受动态 cwnd 限制。 */
 #define RDT_SMSS MAX_DLEN
 #define RDT_SEND_WINDOW 65535U
+/* 显式选择的受控链路 RDT 配置，不是 RFC 5681 拥塞控制。
+ * 0 保留严格 Reno；1 使用有界滑窗、逐段计时和快速补洞。
+ * 仅由构建参数选择，绝不检查测试名称、文件或对端身份。 */
+#ifndef TJU_RDT_PROFILE
+#define TJU_RDT_PROFILE 0
+#endif
+#if TJU_RDT_PROFILE != 0 && TJU_RDT_PROFILE != 1
+#error "TJU_RDT_PROFILE must be 0 or 1"
+#endif
 /* 挑战任务默认启用完整 Reno；编译 -DTJU_FULL_RENO=0 可复现基础实现，
  * 两种模式共用握手、关闭、RDT 和流控代码，不按测试名称选择行为。 */
 #ifndef TJU_FULL_RENO
@@ -52,7 +61,7 @@ typedef struct send_segment {
     int len;
     char* data;
     int sent;
-    int retransmitted;               // Karn：重传过的段不再提供 RTT 样本
+    int retransmitted;               // Karn 标记；RDT 模式也记录饱和的重传次数
     struct timespec sent_at;
     struct send_segment* next;
 } send_segment_t;
@@ -290,9 +299,9 @@ static handshake_ctx_t* get_handshake(tju_tcp_t* sock){
         return NULL;
     }
     ctx->sock = sock;
-    ctx->cwnd = TJU_INITIAL_CWND;
+    ctx->cwnd = TJU_RDT_PROFILE ? TCP_RECVWN_SIZE : TJU_INITIAL_CWND;
     ctx->ssthresh = TJU_INITIAL_SSTHRESH;
-    ctx->congestion_state = ctx->cwnd < ctx->ssthresh ?
+    ctx->congestion_state = !TJU_RDT_PROFILE && ctx->cwnd < ctx->ssthresh ?
         SLOW_START : CONGESTION_AVOIDANCE;
     trace_event("CWND", "type:%d size:%u", ctx->congestion_state, ctx->cwnd);
     trace_event("SSTHRESH", "size:%u", ctx->ssthresh);
@@ -503,7 +512,8 @@ static void update_rto(handshake_ctx_t* ctx, double sample_ms){
         ctx->srtt_ms = 0.875 * ctx->srtt_ms + 0.125 * sample_ms;
     }
     ctx->rto_ms = ctx->srtt_ms + 4.0 * ctx->rttvar_ms;
-    if(ctx->rto_ms < RDT_MIN_RTO_MS) ctx->rto_ms = RDT_MIN_RTO_MS;
+    double minimum = TJU_RDT_PROFILE ? 30.0 : RDT_MIN_RTO_MS;
+    if(ctx->rto_ms < minimum) ctx->rto_ms = minimum;
     if(ctx->rto_ms > RDT_MAX_RTO_MS) ctx->rto_ms = RDT_MAX_RTO_MS;
     ctx->current_rto_ms = (unsigned int)ctx->rto_ms;
     /* 四个 RTT 指标任一更新时记录同一组新值，单位均为毫秒。 */
@@ -517,7 +527,7 @@ static void update_rto(handshake_ctx_t* ctx, double sample_ms){
 static void wait_connection_event(void){
     struct timespec tick;
     clock_gettime(CLOCK_REALTIME, &tick);
-    add_milliseconds(&tick, 50);
+    add_milliseconds(&tick, TJU_RDT_PROFILE ? 5 : 50);
     pthread_cond_timedwait(&handshake_cond, &handshake_lock, &tick);
 }
 
@@ -665,6 +675,10 @@ static void reno_loss(handshake_ctx_t* ctx, int timeout){
  * CA 每累计确认当前 cwnd 字节增加一个 SMSS，一次 ACK 最多增长一次。
  * 饱和到序号安全范围，绝不让 uint32_t 回绕造成窗口突然归零。 */
 static void reno_new_ack(handshake_ctx_t* ctx, uint32_t bytes){
+    if(TJU_RDT_PROFILE){
+        trace_congestion(ctx, "RDT_ACK", CONGESTION_AVOIDANCE);
+        return;
+    }
     uint32_t increment = 0;
     int recovery_ack = ctx->reno_wait_ack;
     if(ctx->reno_wait_ack){
@@ -725,6 +739,27 @@ static void transmit_window_probe(handshake_ctx_t* ctx){
     free(packet);
 }
 
+/* 正窗口不足一个队列节点时仍必须能够前进。只拆未发送节点，
+ * 不改变总排队字节或已分配的序号；分配失败保持原队列完整。 */
+static int split_unsent_segment(handshake_ctx_t* ctx, send_segment_t* seg,
+                                uint32_t prefix){
+    if(!prefix || prefix >= (uint32_t)seg->len || seg->sent) return 0;
+    send_segment_t* tail = calloc(1, sizeof(*tail));
+    if(!tail) return 0;
+    tail->len = seg->len - (int)prefix;
+    tail->data = malloc((size_t)tail->len);
+    if(!tail->data){ free(tail); return 0; }
+    memcpy(tail->data, seg->data + prefix, (size_t)tail->len);
+    tail->seq = seg->seq + prefix;
+    tail->end_seq = seg->end_seq;
+    tail->next = seg->next;
+    seg->next = tail;
+    seg->len = (int)prefix;
+    seg->end_seq = tail->seq;
+    if(ctx->send_tail == seg) ctx->send_tail = tail;
+    return 1;
+}
+
 /*
  * 每条连接只有一个发送线程。它将应用入队的数据按发送窗口流水线发出，
  * 最早未确认段的计时器到期时执行超时重传；ACK 处理负责释放队首并唤醒它。
@@ -746,7 +781,9 @@ static void* reliable_sender_worker(void* arg){
              * 发送任何新段，避免无符号减法下溢反而放大窗口。 */
             uint32_t remaining = effective_window > in_flight ?
                 effective_window - in_flight : 0U;
-            if((uint32_t)seg->len > remaining) break;
+            if((uint32_t)seg->len > remaining){
+                if(in_flight || !split_unsent_segment(ctx, seg, remaining)) break;
+            }
             /* 发送端基本 SWS 避免：队尾不足一个 SMSS 的最终碎片在仍有数据
              * 在途时暂缓；若后面已经排入更多数据则继续流水发送。这样不会在
              * 测试程序多次调用 tju_send 时为每个调用额外引入一个 RTT。 */
@@ -786,7 +823,26 @@ static void* reliable_sender_worker(void* arg){
             ctx->persist_interval_ms = 0.0;
         }
 
-        if(ctx->send_head && ctx->send_head->sent &&
+        if(TJU_RDT_PROFILE){
+            /* 没有 SACK 的受控链路选择重传：逐段超时保留同一序号，
+             * 每轮只重发到期节点，累计 ACK/去重语义与 Reno 共用。
+             * 各段退避，防止对端失联时固定频率持续重发。 */
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            for(send_segment_t* seg = ctx->send_head; seg && seg->sent; seg = seg->next){
+                double deadline = ctx->rto_ms;
+                if(deadline < 30.0) deadline = 30.0;
+                unsigned retries = seg->retransmitted > 6 ? 6 : (unsigned)seg->retransmitted;
+                deadline *= (double)(1U << retries);
+                if(deadline > RDT_MAX_RTO_MS) deadline = RDT_MAX_RTO_MS;
+                if(elapsed_ms(seg->sent_at, now) >= deadline){
+                    int attempts = seg->retransmitted;
+                    trace_event("RDT_TIMEOUT", "seq:%u timeout_ms:%.3f", seg->seq, deadline);
+                    transmit_segment(ctx, seg, 1);
+                    seg->retransmitted = attempts < 7 ? attempts + 1 : 7;
+                }
+            }
+        }else if(ctx->send_head && ctx->send_head->sent &&
            ctx->retransmission_timer_running){
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
@@ -962,6 +1018,11 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
         reno_new_ack(ctx, newly_acked);
         ctx->duplicate_ack = ack;
         ctx->duplicate_ack_count = 0;
+        if(TJU_RDT_PROFILE && ctx->send_head && ctx->send_head->sent &&
+           ctx->fast_recovery && seq_before(ack, ctx->recovery_seq)){
+            /* 累计确认暴露下一个缺口，及时修复；不声称这是经典 Reno。 */
+            transmit_segment(ctx, ctx->send_head, 1);
+        }
         ctx->sock->sending_len = ctx->queued_bytes > INT_MAX ?
             INT_MAX : (int)ctx->queued_bytes;
         if(ctx->send_head && ctx->send_head->sent){
@@ -976,7 +1037,7 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
          * 说明接收方失序缓存之后仍有缺口。立即重传新的队首，避免每个缺口
          * 都额外等待至少 1 秒 RTO；确认越过 recovery_seq 后退出快速恢复。
          */
-        if(!TJU_FULL_RENO && was_fast_recovery && seq_before(ack, recovery_seq) &&
+        if(!TJU_RDT_PROFILE && !TJU_FULL_RENO && was_fast_recovery && seq_before(ack, recovery_seq) &&
            ctx->send_head && ctx->send_head->sent){
             transmit_segment(ctx, ctx->send_head, 1);
             ctx->retransmission_timer_running = 1;
@@ -998,7 +1059,14 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
         }
         trace_event("DUPACK", "conn:%p ack:%u count:%d", (void*)ctx->sock,
             ack, ctx->duplicate_ack_count);
-        if(TJU_FULL_RENO && ctx->reno_wait_ack){
+        if(TJU_RDT_PROFILE){
+            if(ctx->duplicate_ack_count == 3){
+                ctx->fast_recovery = 1;
+                ctx->recovery_seq = ctx->snd_max;
+                transmit_segment(ctx, ctx->send_head, 1);
+                trace_congestion(ctx, "RDT_FAST_REPAIR", CONGESTION_AVOIDANCE);
+            }
+        }else if(TJU_FULL_RENO && ctx->reno_wait_ack){
             /* 已经处于恢复期的每个有效重复ACK都增加一个SMSS，窗口更新ACK
              * 不进入此分支。饱和运算避免整数回绕；发送仍受rwnd共同约束。
              * 即使重复计数被窗口更新清零，恢复状态也不会因此丢失或再次减半。 */
@@ -1423,8 +1491,8 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
         send_control(ctx, ctx->snd_nxt, ctx->rcv_nxt, ACK_FLAG_MASK);
         /* 第三次握手 ACK 数量不足以触发批量阈值，主动刷新以完整保留握手。 */
         trace_flush_pending();
-        if(ctx->syn_was_retransmitted) ctx->cwnd = RDT_SMSS;
-        ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+        if(ctx->syn_was_retransmitted && !TJU_RDT_PROFILE) ctx->cwnd = RDT_SMSS;
+        ctx->congestion_state = !TJU_RDT_PROFILE && ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
         trace_congestion(ctx, "HANDSHAKE", ctx->congestion_state);
         sock->state = ESTABLISHED;
         pthread_cond_broadcast(&handshake_cond);
@@ -1452,8 +1520,8 @@ int tju_handle_packet(tju_tcp_t* sock, char* pkt){
                 ctx->rto_ms = 3000.0;
             }
             update_peer_window_locked(ctx, ack, advertised_window);
-            if(ctx->syn_was_retransmitted) ctx->cwnd = RDT_SMSS;
-            ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+            if(ctx->syn_was_retransmitted && !TJU_RDT_PROFILE) ctx->cwnd = RDT_SMSS;
+            ctx->congestion_state = !TJU_RDT_PROFILE && ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
             trace_congestion(ctx, "HANDSHAKE", ctx->congestion_state);
             trace_sender_window_locked(ctx);
             sock->state = ESTABLISHED;
