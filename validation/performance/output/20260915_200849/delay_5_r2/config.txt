@@ -1,0 +1,1 @@
+factor_level=delay_5 repeat=2 delay_ms=5 rate_mbps=100 loss=0 bytes=2000000 SMSS=1375 IW=4125 ssthresh=65535 MSL=1

@@ -1,0 +1,9 @@
+PASS compile test_client
+PASS compile test_server
+PASS compile test_close_client
+test/test_rdt_client.c: In function ‘main’:
+test/test_rdt_client.c:37:5: warning: implicit declaration of function ‘fstat’ [-Wimplicit-function-declaration]
+   37 |     fstat(fd, &st);
+      |     ^~~~~
+PASS compile test_rdt_client
+PASS compile test_rdt_server

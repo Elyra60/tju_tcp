@@ -1,0 +1,6 @@
+qdisc netem 8001: root refcnt 33 limit 10000 delay 20.0ms rate 20Mbit
+ Sent 25086454 bytes 17523 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+qdisc netem 8002: root refcnt 33 limit 10000 delay 20.0ms rate 20Mbit
+ Sent 1964278 bytes 31681 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0

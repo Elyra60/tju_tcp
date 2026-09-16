@@ -1,0 +1,62 @@
+[
+  {
+    "factor": "delay",
+    "level": 5,
+    "n": 3,
+    "mean": 25.755106455666667,
+    "sd": 0.6735188865450963,
+    "seconds": 0.6215148623333333,
+    "retransmissions": 0,
+    "rto": 0
+  },
+  {
+    "factor": "delay",
+    "level": 20,
+    "n": 3,
+    "mean": 7.692760279,
+    "sd": 0.05156616060542411,
+    "seconds": 2.079939121666667,
+    "retransmissions": 0,
+    "rto": 0
+  },
+  {
+    "factor": "delay",
+    "level": 50,
+    "n": 3,
+    "mean": 3.1385958703333334,
+    "sd": 0.045279973345130724,
+    "seconds": 5.098523439333333,
+    "retransmissions": 0,
+    "rto": 0
+  },
+  {
+    "factor": "bandwidth",
+    "level": 1,
+    "n": 3,
+    "mean": 0.9538162290000001,
+    "sd": 0.00022765382816678368,
+    "seconds": 16.774712068,
+    "retransmissions": 0,
+    "rto": 0
+  },
+  {
+    "factor": "bandwidth",
+    "level": 5,
+    "n": 3,
+    "mean": 4.604605807666666,
+    "sd": 0.021526911778333113,
+    "seconds": 3.474830731,
+    "retransmissions": 0,
+    "rto": 0
+  },
+  {
+    "factor": "bandwidth",
+    "level": 20,
+    "n": 3,
+    "mean": 7.569851143666667,
+    "sd": 0.1591821892683824,
+    "seconds": 2.114263198666667,
+    "retransmissions": 0,
+    "rto": 0
+  }
+]

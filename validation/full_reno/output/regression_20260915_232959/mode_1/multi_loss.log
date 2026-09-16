@@ -1,0 +1,1 @@
+PASS integration multi_loss: 200000 bytes identical, handshake, window bounds, draining close; dropped=2

@@ -135,12 +135,14 @@ static void unit_checks(void){
     uint32_t half = flight_size(ctx) / 2;
     unsigned sent = transmissions;
     for(int i = 0; i < 3; i++) process_ack_locked(ctx, ctx->snd_una, 1);
-    assert(ctx->ssthresh == half && ctx->cwnd == half && ctx->reno_wait_ack);
+    assert(ctx->ssthresh == half && ctx->cwnd == half + (TJU_FULL_RENO ? 3 * RDT_SMSS : 0) && ctx->reno_wait_ack);
     for(int i = 0; i < 12; i++) process_ack_locked(ctx, ctx->snd_una, 1);
     assert(transmissions == sent + 1 && ctx->ssthresh == half);
+    assert(ctx->cwnd == half + (TJU_FULL_RENO ? 15 * RDT_SMSS : 0));
     process_ack_locked(ctx, ctx->send_head->end_seq, 1);
     assert(ctx->cwnd == half && ctx->congestion_state == CONGESTION_AVOIDANCE);
-    assert(transmissions == sent + 2); /* 保留原有部分 ACK 多丢包修复。 */
+    /* 完整Reno在部分ACK退出；基础模式保留历史RDT的后续缺口修复。 */
+    assert(transmissions == sent + (TJU_FULL_RENO ? 1 : 2));
     reno_loss(ctx, 1);
     assert(ctx->cwnd == RDT_SMSS && !ctx->fast_recovery && !ctx->reno_wait_ack);
     assert(ctx->congestion_state == SLOW_START && ctx->duplicate_ack_count == 0);

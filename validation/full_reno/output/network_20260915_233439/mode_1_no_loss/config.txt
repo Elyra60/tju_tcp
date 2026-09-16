@@ -1,0 +1,1 @@
+full=1 mode=no_loss drop=0 cap=65535 bytes=300000 delay_each_ms=20 rate=100Mbit IW=4125 ssthresh=22000 SMSS=1375

@@ -20,6 +20,14 @@
  * 实际新数据发送始终还要受动态 cwnd 限制。 */
 #define RDT_SMSS MAX_DLEN
 #define RDT_SEND_WINDOW 65535U
+/* 挑战任务默认启用完整 Reno；编译 -DTJU_FULL_RENO=0 可复现基础实现，
+ * 两种模式共用握手、关闭、RDT 和流控代码，不按测试名称选择行为。 */
+#ifndef TJU_FULL_RENO
+#define TJU_FULL_RENO 1
+#endif
+#if TJU_FULL_RENO != 0 && TJU_FULL_RENO != 1
+#error "TJU_FULL_RENO must be 0 or 1"
+#endif
 /* 平台配置尚未出现在本地文件中：允许通过 -D 指定字节值。
  * 默认 IW 使用 RFC 5681 对当前 SMSS 的上限，不能误用现代 TCP 的 IW10。 */
 #define RENO_IW_LIMIT ((RDT_SMSS > 2190U ? 2U : (RDT_SMSS > 1095U ? 3U : 4U)) * RDT_SMSS)
@@ -94,7 +102,7 @@ typedef struct handshake_ctx {
     uint32_t ssthresh;                // 慢启动阈值；丢包时根据真实 FlightSize 更新
     int congestion_state;            // 复用框架状态常量，不修改 global.h
     uint64_t ca_acked_bytes;          // 拥塞避免累计确认字节，避免整数截断和 ACK 拆分加速
-    int reno_wait_ack;               // 基础快速重传后等待首次新 ACK，不做窗口膨胀
+    int reno_wait_ack;               // 快速重传后等待首次新 ACK；完整模式期间允许膨胀
     uint32_t traced_cwnd, traced_ssthresh;
     int traced_congestion_type;
     int have_congestion_trace;       // CWND/SSTHRESH 仅变化时输出，CC 保留每个原因快照
@@ -636,11 +644,13 @@ static void trace_congestion(handshake_ctx_t* ctx, const char* reason, int type)
 }
 
 /* 丢包响应必须使用尚未累计确认的数据量，而不是排队长度或 cwnd。
- * 基础 Reno 不膨胀窗口；已有 RDT 的部分 ACK 修复由 fast_recovery 独立维护。 */
+ * RFC 5681 第3.2节：完整模式为三个已离开网络的段增加3*SMSS窗口额度；
+ * 基础模式维持原来的无膨胀行为。超时一律回到一个SMSS并清除恢复状态。 */
 static void reno_loss(handshake_ctx_t* ctx, int timeout){
     uint32_t half = flight_size(ctx) / 2U;
     ctx->ssthresh = half > 2U * RDT_SMSS ? half : 2U * RDT_SMSS;
     ctx->cwnd = timeout ? RDT_SMSS : ctx->ssthresh;
+    if(TJU_FULL_RENO && !timeout) ctx->cwnd += 3U * RDT_SMSS;
     ctx->ca_acked_bytes = 0;
     ctx->reno_wait_ack = !timeout;
     ctx->congestion_state = timeout ? SLOW_START : FAST_RECOVERY;
@@ -656,10 +666,14 @@ static void reno_loss(handshake_ctx_t* ctx, int timeout){
  * 饱和到序号安全范围，绝不让 uint32_t 回绕造成窗口突然归零。 */
 static void reno_new_ack(handshake_ctx_t* ctx, uint32_t bytes){
     uint32_t increment = 0;
+    int recovery_ack = ctx->reno_wait_ack;
     if(ctx->reno_wait_ack){
         ctx->reno_wait_ack = 0;
         ctx->cwnd = ctx->ssthresh;
         ctx->ca_acked_bytes = 0;
+        /* 经典Reno遇到首个新ACK即退出，包括只修复部分缺口的ACK。
+         * 不能继续保留NewReno式部分ACK恢复，也不能给此ACK再加一次CA窗口。 */
+        if(TJU_FULL_RENO) ctx->fast_recovery = 0;
     }else if(ctx->cwnd < ctx->ssthresh){
         increment = bytes < RDT_SMSS ? bytes : RDT_SMSS;
     }else{
@@ -672,7 +686,7 @@ static void reno_new_ack(handshake_ctx_t* ctx, uint32_t bytes){
     if(increment > (uint32_t)INT_MAX - ctx->cwnd) ctx->cwnd = INT_MAX;
     else ctx->cwnd += increment;
     ctx->congestion_state = ctx->cwnd < ctx->ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
-    trace_congestion(ctx, "NEW_ACK", ctx->congestion_state);
+    trace_congestion(ctx, TJU_FULL_RENO && recovery_ack ? "RECOVERY_ACK" : "NEW_ACK", ctx->congestion_state);
 }
 
 static void transmit_segment(handshake_ctx_t* ctx, send_segment_t* seg,
@@ -962,7 +976,7 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
          * 说明接收方失序缓存之后仍有缺口。立即重传新的队首，避免每个缺口
          * 都额外等待至少 1 秒 RTO；确认越过 recovery_seq 后退出快速恢复。
          */
-        if(was_fast_recovery && seq_before(ack, recovery_seq) &&
+        if(!TJU_FULL_RENO && was_fast_recovery && seq_before(ack, recovery_seq) &&
            ctx->send_head && ctx->send_head->sent){
             transmit_segment(ctx, ctx->send_head, 1);
             ctx->retransmission_timer_running = 1;
@@ -976,7 +990,7 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
         /* 只有确认号与通告窗口都未变化时才是重复 ACK。窗口更新 ACK 不代表
          * 丢包，若错误计入三次重复确认会触发无意义的快速重传并破坏吞吐。 */
         if(ctx->duplicate_ack == ack){
-            if(ctx->duplicate_ack_count < 3) ctx->duplicate_ack_count++;
+            if(ctx->duplicate_ack_count < INT_MAX) ctx->duplicate_ack_count++;
         }
         else{
             ctx->duplicate_ack = ack;
@@ -984,13 +998,22 @@ static void process_ack_locked(handshake_ctx_t* ctx, uint32_t ack,
         }
         trace_event("DUPACK", "conn:%p ack:%u count:%d", (void*)ctx->sock,
             ack, ctx->duplicate_ack_count);
-        if(ctx->duplicate_ack_count == 3 && !ctx->fast_recovery){
+        if(TJU_FULL_RENO && ctx->reno_wait_ack){
+            /* 已经处于恢复期的每个有效重复ACK都增加一个SMSS，窗口更新ACK
+             * 不进入此分支。饱和运算避免整数回绕；发送仍受rwnd共同约束。
+             * 即使重复计数被窗口更新清零，恢复状态也不会因此丢失或再次减半。 */
+            if(ctx->cwnd > (uint32_t)INT_MAX - RDT_SMSS) ctx->cwnd = INT_MAX;
+            else ctx->cwnd += RDT_SMSS;
+            trace_congestion(ctx, "DUPACK_INFLATE", FAST_RECOVERY);
+            pthread_cond_broadcast(&handshake_cond);
+        }else if(ctx->duplicate_ack_count == 3 && !ctx->fast_recovery){
             reno_loss(ctx, 0);
             ctx->fast_recovery = 1;
             ctx->recovery_seq = ctx->snd_max;
             transmit_segment(ctx, ctx->send_head, 1);
             clock_gettime(CLOCK_MONOTONIC, &ctx->retransmission_timer_at);
             ctx->retransmission_timer_running = 1;
+            pthread_cond_broadcast(&handshake_cond);
             /* 同一恢复窗口不因后续每组三个重复 ACK 再次减半或重传。 */
         }
     }else if(ack == ctx->snd_una && !advertised_window_unchanged){
